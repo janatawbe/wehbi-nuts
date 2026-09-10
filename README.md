@@ -119,31 +119,23 @@ from the original photo. This milestone intentionally does **not**
 include:
 
 - A product review/approval UI (Milestone 7)
-- Any classical computer-vision object detection (OpenCV/watershed/
-  contours/etc. were prototyped in an earlier iteration of this milestone
-  and are not part of this branch at all)
 - Storefront, cart, checkout, or admin dashboard features
 - More than one AI request per source image (never one per detected item)
 
-### Why Gemini instead of classical CV
+### Why Gemini
 
-An earlier iteration of this milestone used classical CV (global
-thresholding, then gradient-based watershed segmentation) to find product
-*regions* without knowing what they were. After several rounds of
-real-photo testing it reliably found visually-strong regions but
-routinely could not tell a complete product from a label/sticker/internal
-content sitting inside it, and had no way to know a tray of many small
-pieces should be one candidate rather than dozens — telling those apart
-turned out to need actual scene understanding, not more shape heuristics.
+Product photos in this business are highly varied: a sealed package, a
+jar or bottle, a whole tray of loose bulk product, or a close-up filling
+the frame with no packaging at all. What counts as "one sellable unit" in
+each case depends on genuine scene understanding, not just where an edge
+or region happens to be — a tray of many small pieces is one item; a
+jar's cap or sticker is not a second item. A vision-capable LLM can
+reason about a photo in exactly those terms directly: given one full shop
+photo and instructions written around *sellable inventory units* (see
+below), Gemini returns the complete package/jar/bottle/tray as one item,
+keeps genuinely different products separate, and can additionally supply
+a product identity from the same pass.
 
-A small proof-of-concept (since removed — its validated logic lives in
-`app/services/ai/gemini_vision_digitizer.py`) tested whether a vision
-LLM could do better: given one full shop photo and instructions written
-in terms of *sellable inventory units* (see below), Gemini correctly
-returned the complete package/jar/bottle/tray as one item, correctly
-separated genuinely different products, and could additionally supply a
-product identity — something no classical-CV approach here could ever
-provide, since a bounding box alone says nothing about what is inside it.
 Gemini output is still just a **draft** (see "Data quality" below); the
 architecture is deliberately built around a narrow `AIProductAnalyzer`
 interface (`app/services/ai/types.py`) so this specific choice of
