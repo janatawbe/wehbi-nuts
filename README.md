@@ -253,13 +253,34 @@ pixel-space `bbox_x`/`bbox_y`/`bbox_width`/`bbox_height`.
 ### Error handling & retries
 
 `GeminiVisionDigitizer` retries a transient server error (e.g. `503`) up
-to 3 times with a short backoff; a client error (bad request, invalid
-key) is never retried. Either way, only a client-safe
+to 3 times with a short backoff; **a `429` rate-limit/quota error is
+retried the same way** (see below); any other client error (bad request,
+invalid key, unknown model) is never retried, since it will not resolve
+itself. Either way, only a client-safe
 `AIServiceUnavailableError`/`AIInvalidResponseError` message ever
 propagates — never a raw SDK exception or the API key. One source
-image's AI failure (unreachable service, malformed/invalid response) is
-recorded as a failed image and does not stop the rest of the job from
-processing.
+image's AI failure (unreachable service, malformed/invalid response,
+corrupt/unreadable image) is recorded as a failed image and does not stop
+the rest of the job from processing; the job's `error_message` includes
+that specific reason (for a known, client-safe `AIAnalysisError`) rather
+than only the generic "processing failed."
+
+**Production incident, root-caused and fixed:** some real jobs failed
+immediately (~5s) with only "Digitization failed for all source images."
+and no further detail. Root cause: the Gemini free tier enforces a low
+per-model daily request quota (observed: 20 requests/day for
+`gemini-3.6-flash`) and responds with HTTP `429`, which the SDK
+classifies as a `ClientError` — the same exception class used for a
+genuinely bad request. The code treated every `ClientError` as
+non-retryable, so a rate-limited image failed instantly with a message
+that gave no indication it was a quota issue rather than a bug. Fixed by
+retrying a `429` the same way as a `503` (bounded, same attempt count),
+and by having the exhausted-retries message explicitly name the free-tier
+rate limit as the cause, surfaced all the way to the job's
+`error_message`. Retrying cannot make a fully-exhausted *daily* quota
+succeed sooner, by definition — if every attempt still reports 429, wait
+for the quota to reset (or reduce concurrent processing) rather than
+retrying the job repeatedly.
 
 ### Data quality: drafts, not truth
 

@@ -102,11 +102,22 @@ class GeminiVisionDigitizer:
 
     One request per image (never per detected product -- see README/
     project instructions on free-tier usage). Retries a transient server
-    error up to `max_attempts` times with a short backoff; a client error
-    (bad request, invalid key, etc.) is not retried. The raw model
-    response is always re-validated locally with Pydantic before being
-    trusted -- "structured output" mode is a strong hint to the model, not
-    a guarantee.
+    error, or a 429 rate-limit/quota error, up to `max_attempts` times with
+    a short backoff; any other client error (bad request, invalid key,
+    unknown model, etc.) is not retried, since it will not resolve itself.
+    The raw model response is always re-validated locally with Pydantic
+    before being trusted -- "structured output" mode is a strong hint to
+    the model, not a guarantee.
+
+    Root-caused in production (see README): the Gemini free tier enforces
+    a low per-model request quota (as observed, 20 requests/day for
+    gemini-3.6-flash) and responds with HTTP 429, which the SDK classifies
+    as a `ClientError` -- the same class used for a genuinely bad request.
+    Treating every `ClientError` as non-retryable meant a rate-limited
+    image failed immediately (no retry at all) with a generic "digitization
+    failed" message that gave no indication *why*. 429 is now retried like
+    a server error, and if retries are exhausted, the message explicitly
+    says the free-tier rate limit was hit rather than a generic failure.
     """
 
     def __init__(
@@ -148,9 +159,24 @@ class GeminiVisionDigitizer:
                     f"Gemini was unavailable after {attempt} attempts."
                 ) from exc
             except genai_errors.ClientError as exc:
-                # Never retried: a bad request/auth error will not fix
-                # itself, and never include the raw exception (may echo
-                # request details) in what bubbles up to the API layer.
+                if exc.code == 429:
+                    # Rate limit / quota exceeded -- transient in principle
+                    # (the API itself suggests a retry delay), so retried
+                    # the same as a server error rather than failing
+                    # instantly with no indication of the real cause.
+                    last_error = exc
+                    if attempt < self._max_attempts:
+                        time.sleep(self._retry_backoff_seconds * attempt)
+                        continue
+                    raise AIServiceUnavailableError(
+                        "Gemini's free-tier rate limit was exceeded for this image "
+                        f"after {attempt} attempts. Wait a while before retrying, or "
+                        "process fewer images at once."
+                    ) from exc
+                # Any other client error (bad request, invalid key, unknown
+                # model, etc.) will not resolve itself -- never retried, and
+                # never include the raw exception (may echo request
+                # details) in what bubbles up to the API layer.
                 raise AIServiceUnavailableError(
                     "Gemini rejected the request (client error)."
                 ) from exc

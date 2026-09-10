@@ -274,6 +274,7 @@ def test_one_image_failing_is_recorded_without_failing_the_whole_job(client: Tes
     assert body["processed_items"] == 1
     assert body["failed_items"] == 1
     assert body["error_message"] is not None
+    assert "Gemini was unavailable." in body["error_message"]
     assert len(body["candidates"]) == 1
     assert body["candidates"][0]["name_en"] == "Coffee"
 
@@ -291,6 +292,49 @@ def test_all_images_failing_marks_job_failed(client: TestClient):
     assert body["failed_items"] == 1
     assert body["error_message"] is not None
     assert body["candidates"] == []
+
+
+def test_rate_limit_failure_surfaces_the_real_reason_not_a_generic_message(client: TestClient):
+    """Regression test for a production incident: a Gemini free-tier 429
+    was swallowed into the generic "Digitization failed for all source
+    images." with no indication of the actual cause. The job's
+    error_message must now include the specific, client-safe reason the
+    AI service raised."""
+    job = upload_job(client, make_image_bytes())
+    use_fake_analyzer(
+        [
+            AIServiceUnavailableError(
+                "Gemini's free-tier rate limit was exceeded for this image after 3 attempts. "
+                "Wait a while before retrying, or process fewer images at once."
+            )
+        ]
+    )
+
+    response = client.post(f"/api/digitizer/jobs/{job['id']}/process")
+
+    body = response.json()
+    assert body["status"] == "failed"
+    assert "rate limit" in body["error_message"].lower()
+    assert body["error_message"] != "Digitization failed for all source images."
+
+
+def test_unexpected_non_ai_error_gets_a_generic_safe_message(client: TestClient, tmp_path: Path):
+    """An error that is NOT a known, client-safe AIAnalysisError (e.g. a
+    corrupt/unreadable source image on disk) must still fail that image
+    cleanly, but must never leak an internal detail such as a filesystem
+    path into the job's error_message."""
+    job = upload_job(client, make_image_bytes())
+    source_dir = tmp_path / "uploads" / "digitizer" / job["id"] / "source"
+    source_file = next(source_dir.iterdir())
+    source_file.write_bytes(b"not actually an image anymore")
+    use_fake_analyzer([[make_detected_product()]])  # never reached: the image can't even be read
+
+    response = client.post(f"/api/digitizer/jobs/{job['id']}/process")
+
+    body = response.json()
+    assert body["status"] == "failed"
+    assert str(source_dir) not in body["error_message"]
+    assert str(tmp_path) not in body["error_message"]
 
 
 def test_malformed_ai_response_is_treated_as_a_failed_image(client: TestClient):

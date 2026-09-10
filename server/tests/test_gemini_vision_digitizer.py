@@ -195,6 +195,61 @@ def test_client_error_is_not_retried():
     assert len(digitizer._client.models.calls) == 1  # never attempted the second, scripted response
 
 
+def _rate_limit_error() -> genai_errors.ClientError:
+    """A 429 shaped like Gemini's real free-tier quota response (root
+    cause of a production incident: every image reliably failed instantly,
+    with no retry and no useful error, because a 429 was previously
+    treated exactly like a generic 4xx client error)."""
+    return genai_errors.ClientError(
+        429,
+        {
+            "error": {
+                "code": 429,
+                "message": "You exceeded your current quota, please check your plan and billing details.",
+                "status": "RESOURCE_EXHAUSTED",
+            }
+        },
+    )
+
+
+def test_rate_limit_error_is_retried_then_succeeds():
+    digitizer = _make_digitizer([_rate_limit_error(), _FakeResponse(_valid_payload([ONE_ITEM]))])
+
+    results = digitizer.analyze_image(b"fake-bytes", "image/jpeg")
+
+    assert len(results) == 1
+    assert len(digitizer._client.models.calls) == 2
+
+
+def test_rate_limit_error_exhausts_retries_with_a_clear_message():
+    digitizer = _make_digitizer(
+        [_rate_limit_error(), _rate_limit_error(), _rate_limit_error()], max_attempts=3
+    )
+
+    with pytest.raises(AIServiceUnavailableError) as exc_info:
+        digitizer.analyze_image(b"fake-bytes", "image/jpeg")
+
+    assert len(digitizer._client.models.calls) == 3
+    # The whole point of this fix: the message must say *why* (rate
+    # limit/free tier), not just "failed" -- this is what the frontend
+    # surfaces to the user instead of a generic message.
+    assert "rate limit" in str(exc_info.value).lower()
+
+
+def test_non_rate_limit_client_error_is_still_not_retried():
+    """A genuine bad-request/auth-style 4xx (not 429) must remain
+    non-retryable -- only rate-limit/quota errors get the retry
+    treatment."""
+    client_error = genai_errors.ClientError(403, {"error": {"message": "permission denied"}})
+    digitizer = _make_digitizer([client_error, _FakeResponse(_valid_payload([ONE_ITEM]))])
+
+    with pytest.raises(AIServiceUnavailableError) as exc_info:
+        digitizer.analyze_image(b"fake-bytes", "image/jpeg")
+
+    assert len(digitizer._client.models.calls) == 1
+    assert "rate limit" not in str(exc_info.value).lower()
+
+
 def test_error_messages_never_contain_the_api_key():
     server_error = genai_errors.ServerError(503, {"error": {"message": "overloaded"}})
     digitizer = GeminiVisionDigitizer(

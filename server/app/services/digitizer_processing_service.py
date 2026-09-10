@@ -165,11 +165,25 @@ def process_digitization_job(
 
     pending: list[_PendingProduct] = []
     failed_count = 0
+    last_image_error: str | None = None
     for source_filename in source_filenames:
         try:
             pending.extend(_detect_products_for_image(source_dir / source_filename, analyzer))
-        except Exception:
+        except AIAnalysisError as exc:
+            # AIAnalysisError messages are constructed to be client-safe
+            # (see app/services/ai/errors.py) -- e.g. "Gemini's free-tier
+            # rate limit was exceeded..." -- so surfacing the real reason
+            # here, instead of only a generic "processing failed", is what
+            # lets the frontend show something actionable.
             failed_count += 1
+            last_image_error = str(exc)
+        except Exception:
+            # Anything else (a corrupt/unreadable source image, an
+            # unexpected I/O error, etc.) is not guaranteed to have a
+            # client-safe message -- e.g. Pillow's own errors can include
+            # the internal file path -- so it is never included verbatim.
+            failed_count += 1
+            last_image_error = "An unexpected error occurred while processing this image."
 
     processed_count = len(source_filenames) - failed_count
 
@@ -210,12 +224,16 @@ def process_digitization_job(
         if failed_count > 0 and processed_count == 0:
             job.status = DigitizationJobStatus.FAILED
             job.error_message = "Digitization failed for all source images."
+            if last_image_error:
+                job.error_message += f" {last_image_error}"
         elif failed_count > 0:
             job.status = DigitizationJobStatus.COMPLETED
             job.error_message = (
                 f"Digitization completed, but {failed_count} of "
                 f"{len(source_filenames)} source image(s) could not be processed."
             )
+            if last_image_error:
+                job.error_message += f" {last_image_error}"
         else:
             job.status = DigitizationJobStatus.COMPLETED
             job.error_message = None
