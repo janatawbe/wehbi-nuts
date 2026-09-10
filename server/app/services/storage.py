@@ -1,7 +1,9 @@
+import re
 import shutil
 import uuid
 from io import BytesIO
 from pathlib import Path
+from typing import Literal
 
 from PIL import Image
 
@@ -14,6 +16,14 @@ BASE_DIR = Path(__file__).resolve().parents[2]
 # under. Only these formats are accepted, regardless of the client-supplied
 # filename or Content-Type header.
 SUPPORTED_IMAGE_FORMATS = {"JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp"}
+
+# Every filename this module ever writes is `<32-hex-uuid><.jpg|.png|.webp>`
+# (see save_image/save_crop) -- this is also the only shape the media
+# endpoint will ever serve, which is what makes path-traversal impossible
+# by construction rather than by escaping/blocklisting client input.
+_SAFE_FILENAME = re.compile(r"^[0-9a-f]{32}\.(jpg|png|webp)$")
+
+MediaKind = Literal["source", "products"]
 
 
 class InvalidImageError(ValueError):
@@ -102,3 +112,63 @@ def list_job_source_images(upload_root: Path, job_id: uuid.UUID) -> list[str]:
     if not source_dir.is_dir():
         return []
     return sorted(p.name for p in source_dir.iterdir() if p.is_file())
+
+
+def get_job_source_dir(upload_root: Path, job_id: uuid.UUID) -> Path:
+    """The directory holding a job's original uploaded images. Never
+    created here -- it is created by `allocate_job_directory` at upload
+    time; callers that expect it to already exist (processing) should
+    treat a missing directory as "no source images", not create one."""
+    return upload_root / str(job_id) / "source"
+
+
+def get_job_products_dir(upload_root: Path, job_id: uuid.UUID) -> Path:
+    """The directory holding a job's cropped product images, creating it
+    on first use. Kept as a sibling of `source/` (never inside it) so
+    reprocessing a job's crops can never touch its original uploads."""
+    products_dir = upload_root / str(job_id) / "products"
+    products_dir.mkdir(parents=True, exist_ok=True)
+    return products_dir
+
+
+def save_crop(products_dir: Path, jpeg_bytes: bytes) -> str:
+    """Persist an already-encoded JPEG crop under a freshly generated safe
+    filename, mirroring `save_image`'s naming/containment guarantees."""
+    filename = f"{uuid.uuid4().hex}.jpg"
+    file_path = products_dir / filename
+    if file_path.resolve().parent != products_dir.resolve():
+        raise InvalidImageError("Invalid crop target.")  # unreachable in practice
+    file_path.write_bytes(jpeg_bytes)
+    return filename
+
+
+def cleanup_job_products(upload_root: Path, job_id: uuid.UUID) -> None:
+    """Remove all previously-generated crops for a job (e.g. before a
+    rerun), without touching its source images."""
+    shutil.rmtree(upload_root / str(job_id) / "products", ignore_errors=True)
+
+
+def resolve_media_path(
+    upload_root: Path, job_id: uuid.UUID, kind: MediaKind, filename: str
+) -> Path | None:
+    """Resolve a job's source/crop filename to an on-disk path, or None if
+    the request is invalid/the file doesn't exist -- callers should treat
+    None as a 404, never distinguishing "bad filename" from "not found" in
+    the response (both are just "not available").
+
+    Safety is by construction, not by sanitizing `filename`: only a
+    filename that exactly matches the pattern this module itself generates
+    (32 hex chars + a supported extension) is even looked up, and the
+    resolved path is double-checked to still be inside the expected
+    directory before being returned.
+    """
+    if not _SAFE_FILENAME.match(filename):
+        return None
+
+    directory = upload_root / str(job_id) / kind
+    candidate = directory / filename
+    if candidate.resolve().parent != directory.resolve():
+        return None
+    if not candidate.is_file():
+        return None
+    return candidate

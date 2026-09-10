@@ -2,13 +2,13 @@ import uuid
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import Boolean, CheckConstraint, ForeignKey, JSON, Numeric, String, Text
+from sqlalchemy import Boolean, CheckConstraint, ForeignKey, Integer, JSON, Numeric, String, Text
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 from app.db.types import GUID
-from app.models.enums import ReviewStatus
+from app.models.enums import IdentificationBasis, PresentationType, ReviewStatus
 from app.models.mixins import TimestampMixin, UUIDPrimaryKeyMixin
 
 
@@ -18,6 +18,19 @@ class DigitizedProduct(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         CheckConstraint(
             "ai_confidence IS NULL OR (ai_confidence >= 0 AND ai_confidence <= 1)",
             name="ck_digitized_products_ai_confidence_range",
+        ),
+        CheckConstraint(
+            "bbox_x IS NULL OR bbox_x >= 0", name="ck_digitized_products_bbox_x_non_negative"
+        ),
+        CheckConstraint(
+            "bbox_y IS NULL OR bbox_y >= 0", name="ck_digitized_products_bbox_y_non_negative"
+        ),
+        CheckConstraint(
+            "bbox_width IS NULL OR bbox_width > 0", name="ck_digitized_products_bbox_width_positive"
+        ),
+        CheckConstraint(
+            "bbox_height IS NULL OR bbox_height > 0",
+            name="ck_digitized_products_bbox_height_positive",
         ),
     )
 
@@ -64,6 +77,37 @@ class DigitizedProduct(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         nullable=False,
         default=ReviewStatus.DRAFT,
     )
+
+    # Gemini vision-digitizer fields (Milestone 4). `category_suggestion` is
+    # the AI's raw, unvalidated category text -- distinct from `category_id`,
+    # which stays NULL until a human links this draft to a real `Category`.
+    category_suggestion: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    presentation: Mapped[PresentationType | None] = mapped_column(
+        SAEnum(
+            PresentationType,
+            name="presentation_type",
+            values_callable=lambda enum_cls: [member.value for member in enum_cls],
+        ),
+        nullable=True,
+    )
+    identification_basis: Mapped[IdentificationBasis | None] = mapped_column(
+        SAEnum(
+            IdentificationBasis,
+            name="identification_basis",
+            values_callable=lambda enum_cls: [member.value for member in enum_cls],
+        ),
+        nullable=True,
+    )
+    visible_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Pixel-space bounding box within `source_image`, derived from Gemini's
+    # normalized [0, 1000] coordinates -- kept in pixel space so displaying
+    # or re-cropping never needs the original image dimensions again.
+    bbox_x: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    bbox_y: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    bbox_width: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    bbox_height: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     job: Mapped["DigitizationJob"] = relationship(  # noqa: F821
         "DigitizationJob", back_populates="digitized_products"

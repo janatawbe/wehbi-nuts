@@ -58,7 +58,7 @@ What it does include:
 This separation ensures AI output is always a suggestion that a person
 reviews before it affects the real catalog.
 
-## Milestone 3 — Digitizer Upload System (current scope)
+## Milestone 3 — Digitizer Upload System
 
 Adds the first functional stage of the AI Digitizer workflow: uploading
 shelf/product photos and turning them into a `DigitizationJob`. This
@@ -111,6 +111,171 @@ runtime and are **not** committed — `.gitignore` excludes everything under
 that path except a `.gitkeep` placeholder that keeps the folder present in
 a fresh clone.
 
+## Milestone 4 — Gemini AI Digitizer (current scope)
+
+Runs Gemini vision analysis over each source image in a job and turns the
+sellable inventory units it finds into `DigitizedProduct` drafts, cropped
+from the original photo. This milestone intentionally does **not**
+include:
+
+- A product review/approval UI (Milestone 7)
+- Any classical computer-vision object detection (OpenCV/watershed/
+  contours/etc. were prototyped in an earlier iteration of this milestone
+  and are not part of this branch at all)
+- Storefront, cart, checkout, or admin dashboard features
+- More than one AI request per source image (never one per detected item)
+
+### Why Gemini instead of classical CV
+
+An earlier iteration of this milestone used classical CV (global
+thresholding, then gradient-based watershed segmentation) to find product
+*regions* without knowing what they were. After several rounds of
+real-photo testing it reliably found visually-strong regions but
+routinely could not tell a complete product from a label/sticker/internal
+content sitting inside it, and had no way to know a tray of many small
+pieces should be one candidate rather than dozens — telling those apart
+turned out to need actual scene understanding, not more shape heuristics.
+
+A small proof-of-concept (since removed — its validated logic lives in
+`app/services/ai/gemini_vision_digitizer.py`) tested whether a vision
+LLM could do better: given one full shop photo and instructions written
+in terms of *sellable inventory units* (see below), Gemini correctly
+returned the complete package/jar/bottle/tray as one item, correctly
+separated genuinely different products, and could additionally supply a
+product identity — something no classical-CV approach here could ever
+provide, since a bounding box alone says nothing about what is inside it.
+Gemini output is still just a **draft** (see "Data quality" below); the
+architecture is deliberately built around a narrow `AIProductAnalyzer`
+interface (`app/services/ai/types.py`) so this specific choice of
+provider/model is not baked into the rest of the app.
+
+### What Gemini is asked to detect
+
+The system instruction (`app/services/ai/gemini_vision_digitizer.py`)
+tells Gemini it is digitizing inventory for a nuts/coffee/sweets/snacks/
+dried-food roastery shop, and to reason in terms of **sellable inventory
+units**, not every visually distinct object:
+
+- a whole package/bag/box is one item (its label/logo is not a separate item)
+- a whole jar/container is one item (its lid/sticker/cap is not)
+- a whole bottle is one item
+- an entire bulk tray/bin of one product is one item (individual pieces
+  inside it are not)
+- a loose bulk product filling the frame with no packaging is one item
+- a shelf of different products returns one item per distinguishable unit
+- shelves, dividers, price tags, logos-as-objects, and decorations are
+  ignored entirely
+
+Gemini may visually infer a likely product identity when there is no
+readable text at all (common for loose bulk products) — but it must never
+present a visual guess as if it were read from text. `identification_basis`
+(`visual` / `text` / `visual_and_text`) makes that distinction explicit in
+every stored result, and a low `confidence` is expected/accepted when the
+model isn't sure, rather than a confident-sounding invented name.
+
+### Structured output & bounding-box convention
+
+Gemini is asked for one JSON object per image: `{"items": [...]}`, each
+item validated (both by Gemini's structured-output mode *and* again
+independently with Pydantic on the server, since a model's "structured
+output" is a strong hint, not a guarantee) against
+`app.services.ai.types.DetectedProduct`: `name_en`, `name_ar`, `category`,
+`presentation` (`packaged`/`jar`/`bottle`/`bulk_tray`/`bulk_loose`/`other`),
+`bbox`, `confidence` (0-1), `visible_text`, `identification_basis`, `notes`.
+
+`bbox` is `[ymin, xmin, ymax, xmax]`, each an integer normalized to
+**0-1000** relative to the full image regardless of its actual pixel size
+(0,0 = top-left, 1000,1000 = bottom-right) — validated to be 4 integers in
+range with `min < max`. `digitizer_processing_service._bbox_to_pixels`
+converts this to pixel-space `(x, y, width, height)`, clamped to the
+image's actual bounds, before cropping; a box that collapses to zero area
+after clamping/rounding is dropped rather than turned into a degenerate
+crop.
+
+### Processing pipeline & rerun behavior
+
+`POST /api/digitizer/jobs/{job_id}/process`
+(`app/services/digitizer_processing_service.py`) is a separate endpoint
+from upload, not an automatic step of it: an AI call per image is slow
+and can fail independently of upload validation, so upload stays fast/
+synchronous while processing is an explicit, separately-retriable action.
+No background worker is introduced — it runs synchronously within the
+request, which is sufficient at this milestone's scale.
+
+For each source image: one Gemini request → each returned item's bbox is
+converted to pixel space and clamped → cropped from the **original**
+image (`Image.crop`, no resizing/upscaling/resampling, so the crop's
+aspect ratio always matches its bbox exactly) → encoded as JPEG and
+re-decoded to confirm it is genuinely renderable before being trusted →
+persisted as a `DigitizedProduct` (`review_status=DRAFT`,
+`needs_review=True`, `product_id=NULL`).
+
+Job status: `pending` (at upload) → `processing` → `completed`, or
+`failed` if every source image's AI call failed. A partial failure (some
+images succeed, some don't) is still `completed`, with the failure count
+and a note in `error_message` — a job is never silently reported as a
+full success when part of it wasn't. Rerunning a job is safe: previous
+`DigitizedProduct` rows and crop files for that job are replaced, never
+accumulated.
+
+### Crop storage structure
+
+```
+server/uploads/digitizer/<job-id>/
+    source/            # original uploaded images (Milestone 3, never modified)
+    products/           # cropped product images, one per DigitizedProduct
+```
+
+Crop filenames are random, server-generated 32-hex-character names
+(`<uuid>.jpg`), matching the existing source-image naming convention —
+never derived from any AI-provided text.
+
+### Safe media serving
+
+`GET /api/digitizer/jobs/{job_id}/media/{source|products}/{filename}`
+serves a source or crop image without ever exposing the filesystem: the
+filename must exactly match the safe pattern this app itself generates,
+and the resolved path is re-checked to stay inside the expected
+directory. An invalid filename, an unknown job, or an unknown `kind` are
+all indistinguishable from "not found" in the response.
+
+### Database changes
+
+Milestone 2's `DigitizedProduct` model already had `job_id`,
+`source_image`, `crop_image`, `ai_confidence`, `ai_raw_result`,
+`needs_review`, and `review_status` — all reused as-is. One migration
+(`alembic/versions/a1f3c9d4e6b2_*.py`) adds the fields Gemini's output
+needed that didn't already exist: `category_suggestion` (Gemini's raw
+category text, kept distinct from the human-assigned `category_id` FK),
+`presentation`, `identification_basis`, `visible_text`, `notes`, and
+pixel-space `bbox_x`/`bbox_y`/`bbox_width`/`bbox_height`.
+
+### Error handling & retries
+
+`GeminiVisionDigitizer` retries a transient server error (e.g. `503`) up
+to 3 times with a short backoff; a client error (bad request, invalid
+key) is never retried. Either way, only a client-safe
+`AIServiceUnavailableError`/`AIInvalidResponseError` message ever
+propagates — never a raw SDK exception or the API key. One source
+image's AI failure (unreachable service, malformed/invalid response) is
+recorded as a failed image and does not stop the rest of the job from
+processing.
+
+### Data quality: drafts, not truth
+
+Every `DigitizedProduct` created here is `review_status=DRAFT` with
+`needs_review=True` and `product_id=NULL` — nothing in this milestone
+creates or modifies a real, sellable `Product`. Gemini's identification
+(including a purely visual guess for an unlabeled bulk product) is always
+a draft for a human to confirm, never treated as verified fact.
+
+### Manually testing detection
+
+`test-data/generated-shop-images/` (gitignored, not committed) holds
+synthetic validation photos used during development — see git history for
+how they were generated. `test-data/real-shop-images/` is a held-out,
+never-inspected-during-development real-photo validation set.
+
 ## Project Structure
 
 ```
@@ -138,7 +303,11 @@ wehbi-nuts/
 │   │   ├── db/                     # Engine, session, declarative base, GUID type
 │   │   ├── models/                 # SQLAlchemy models + enums
 │   │   ├── schemas/                # Pydantic create/update/read schemas
-│   │   └── services/                # digitizer_service.py, storage.py
+│   │   └── services/
+│   │       ├── ai/                  # AIProductAnalyzer + GeminiVisionDigitizer
+│   │       ├── digitizer_service.py            # upload (Milestone 3)
+│   │       ├── digitizer_processing_service.py # Gemini processing (Milestone 4)
+│   │       └── storage.py
 │   ├── alembic/                    # Migration environment
 │   │   └── versions/                # Migration scripts
 │   ├── uploads/digitizer/          # Runtime upload storage (gitignored)

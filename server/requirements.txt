@@ -9,7 +9,5 @@ psycopg[binary]==3.3.5
 pillow==12.3.0
 python-multipart==0.0.32
 
-# Gemini vision proof-of-concept (server/scripts/gemini_poc.py) --
-# not wired into the FastAPI app yet.
+# Gemini vision digitizer (Milestone 4).
 google-genai==2.22.0
-python-dotenv==1.2.3

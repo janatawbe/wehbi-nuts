@@ -5,7 +5,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.models.enums import ReviewStatus
+from app.models.enums import IdentificationBasis, PresentationType, ReviewStatus
 
 
 class DigitizedProductBase(BaseModel):
@@ -26,6 +26,17 @@ class DigitizedProductBase(BaseModel):
     needs_review: bool = True
     ai_raw_result: dict[str, Any] | None = None
     review_status: ReviewStatus = ReviewStatus.DRAFT
+
+    # Gemini vision-digitizer fields (Milestone 4).
+    category_suggestion: str | None = Field(default=None, max_length=255)
+    presentation: PresentationType | None = None
+    identification_basis: IdentificationBasis | None = None
+    visible_text: str | None = None
+    notes: str | None = None
+    bbox_x: int | None = Field(default=None, ge=0)
+    bbox_y: int | None = Field(default=None, ge=0)
+    bbox_width: int | None = Field(default=None, gt=0)
+    bbox_height: int | None = Field(default=None, gt=0)
 
 
 class DigitizedProductCreate(DigitizedProductBase):
