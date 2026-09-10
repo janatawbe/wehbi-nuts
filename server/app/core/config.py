@@ -9,6 +9,9 @@ class Settings(BaseSettings):
     app_name: str = "Wehbi Nuts API"
     environment: str = "development"
     cors_origins: list[str] = ["http://localhost:5173"]
+    database_url: str = (
+        "postgresql+psycopg://wehbi_nuts:wehbi_nuts@localhost:5432/wehbi_nuts"
+    )
 
 
 @lru_cache
