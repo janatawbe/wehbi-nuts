@@ -37,3 +37,6 @@ npm-debug.log*
 # Local validation images
 test-data/real-shop-images/
 test-data/generated-shop-images/
+
+# Gemini POC evaluation artifacts (server/scripts/gemini_poc.py)
+server/scripts/gemini_poc_output/
