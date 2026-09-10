@@ -169,7 +169,7 @@ def test_process_job_with_multiple_products(client: TestClient):
 
 def test_bulk_tray_scene_is_one_candidate(client: TestClient):
     """A bulk tray must surface as exactly one DigitizedProduct draft, not
-    one per piece inside it -- Gemini is trusted to have already applied
+    one per piece inside it -- the AI provider is trusted to have already applied
     that judgment (see the system instruction); this test locks in that
     the processing pipeline does not somehow split or duplicate it."""
     job = upload_job(client, make_image_bytes())
@@ -262,7 +262,7 @@ def test_one_image_failing_is_recorded_without_failing_the_whole_job(client: Tes
     job = upload_job(client, make_image_bytes(), make_image_bytes())
     use_fake_analyzer(
         [
-            AIServiceUnavailableError("Gemini was unavailable."),
+            AIServiceUnavailableError("OpenAI was unavailable."),
             [make_detected_product(name_en="Coffee")],
         ]
     )
@@ -274,14 +274,14 @@ def test_one_image_failing_is_recorded_without_failing_the_whole_job(client: Tes
     assert body["processed_items"] == 1
     assert body["failed_items"] == 1
     assert body["error_message"] is not None
-    assert "Gemini was unavailable." in body["error_message"]
+    assert "OpenAI was unavailable." in body["error_message"]
     assert len(body["candidates"]) == 1
     assert body["candidates"][0]["name_en"] == "Coffee"
 
 
 def test_all_images_failing_marks_job_failed(client: TestClient):
     job = upload_job(client, make_image_bytes())
-    use_fake_analyzer([AIServiceUnavailableError("Gemini was unavailable.")])
+    use_fake_analyzer([AIServiceUnavailableError("OpenAI was unavailable.")])
 
     response = client.post(f"/api/digitizer/jobs/{job['id']}/process")
 
@@ -295,7 +295,7 @@ def test_all_images_failing_marks_job_failed(client: TestClient):
 
 
 def test_rate_limit_failure_surfaces_the_real_reason_not_a_generic_message(client: TestClient):
-    """Regression test for a production incident: a Gemini free-tier 429
+    """Regression test for a production incident: an OpenAI rate-limit
     was swallowed into the generic "Digitization failed for all source
     images." with no indication of the actual cause. The job's
     error_message must now include the specific, client-safe reason the
@@ -304,7 +304,7 @@ def test_rate_limit_failure_surfaces_the_real_reason_not_a_generic_message(clien
     use_fake_analyzer(
         [
             AIServiceUnavailableError(
-                "Gemini's free-tier rate limit was exceeded for this image after 3 attempts. "
+                "OpenAI's rate limit was exceeded for this image after 3 attempts. "
                 "Wait a while before retrying, or process fewer images at once."
             )
         ]
@@ -339,7 +339,7 @@ def test_unexpected_non_ai_error_gets_a_generic_safe_message(client: TestClient,
 
 def test_malformed_ai_response_is_treated_as_a_failed_image(client: TestClient):
     job = upload_job(client, make_image_bytes())
-    use_fake_analyzer([AIInvalidResponseError("Gemini's response did not match the schema.")])
+    use_fake_analyzer([AIInvalidResponseError("OpenAI's response did not match the schema.")])
 
     response = client.post(f"/api/digitizer/jobs/{job['id']}/process")
 
@@ -372,7 +372,7 @@ def test_ai_service_not_configured_returns_503_without_leaking_details(client: T
     # which requires a configured API key.
     from app.core.config import Settings, get_settings
 
-    app.dependency_overrides[get_settings] = lambda: Settings(gemini_api_key=None)
+    app.dependency_overrides[get_settings] = lambda: Settings(openai_api_key=None)
     try:
         job = upload_job(client, make_image_bytes())
         response = client.post(f"/api/digitizer/jobs/{job['id']}/process")
@@ -491,8 +491,8 @@ def test_media_endpoint_rejects_unknown_job(client: TestClient):
 def test_api_key_never_appears_in_any_job_response(client: TestClient):
     from app.core.config import Settings, get_settings
 
-    fake_key = "SECRET-GEMINI-KEY-FOR-TEST"
-    app.dependency_overrides[get_settings] = lambda: Settings(gemini_api_key=fake_key)
+    fake_key = "SECRET-OPENAI-KEY-FOR-TEST"
+    app.dependency_overrides[get_settings] = lambda: Settings(openai_api_key=fake_key)
     try:
         job = upload_job(client, make_image_bytes())
         use_fake_analyzer([[make_detected_product()]])

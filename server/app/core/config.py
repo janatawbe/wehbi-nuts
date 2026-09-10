@@ -20,10 +20,10 @@ class Settings(BaseSettings):
     digitizer_max_images_per_job: int = 20
     digitizer_max_image_dimension: int = 8000  # pixels, width or height
 
-    # Gemini vision digitizer (Milestone 4). See
-    # app/services/ai/gemini_vision_digitizer.py for the full rationale.
-    gemini_api_key: str | None = None
-    gemini_model: str = "gemini-3.6-flash"
+    # AI vision digitizer (Milestone 4). See
+    # app/services/ai/openai_vision_digitizer.py for the full rationale.
+    openai_api_key: str | None = None
+    openai_model: str = "gpt-4o-mini"
 
 
 @lru_cache

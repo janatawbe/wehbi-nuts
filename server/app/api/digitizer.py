@@ -13,7 +13,7 @@ from app.models.digitized_product import DigitizedProduct
 from app.schemas.digitization_job import DigitizationJobRead
 from app.schemas.digitizer import DigitizerJobRead
 from app.services.ai.errors import AIAnalysisError
-from app.services.ai.gemini_vision_digitizer import GeminiVisionDigitizer
+from app.services.ai.openai_vision_digitizer import OpenAIVisionDigitizer
 from app.services.ai.types import AIProductAnalyzer
 from app.services.digitizer_processing_service import ProcessingError, process_digitization_job
 from app.services.digitizer_service import DigitizerUploadError, create_digitization_job
@@ -28,16 +28,16 @@ def get_ai_analyzer(settings: Settings = Depends(get_settings)) -> AIProductAnal
     """FastAPI dependency constructing the AI product analyzer.
 
     Tests override this with a fake analyzer so the test suite never makes
-    a live Gemini call. Depending on the narrow `AIProductAnalyzer`
-    protocol (not the concrete `GeminiVisionDigitizer` class) everywhere
-    else in the app is what would let a future provider be swapped in
-    without touching the processing pipeline or the API layer.
+    a live OpenAI call. Depending on the narrow `AIProductAnalyzer`
+    protocol (not the concrete `OpenAIVisionDigitizer` class) everywhere
+    else in the app is what would let a different provider be swapped in
+    later without touching the processing pipeline or the API layer.
     """
-    if not settings.gemini_api_key:
+    if not settings.openai_api_key:
         raise HTTPException(
             status_code=503, detail="The AI digitization service is not configured."
         )
-    return GeminiVisionDigitizer(api_key=settings.gemini_api_key, model_name=settings.gemini_model)
+    return OpenAIVisionDigitizer(api_key=settings.openai_api_key, model_name=settings.openai_model)
 
 
 # Small helper shared by every route below: bolts the filesystem-derived
@@ -109,13 +109,13 @@ def process_job(
     upload_root: Path = Depends(get_upload_root),
     analyzer: AIProductAnalyzer = Depends(get_ai_analyzer),
 ) -> DigitizerJobRead:
-    """Run Gemini digitization for every source image in this job.
+    """Run AI digitization for every source image in this job.
 
     A separate endpoint from upload rather than an automatic step of it:
     an AI call per image is slow (seconds) and can fail independently of
     upload validation, so keeping upload fast/synchronous and processing
     as an explicit, separately-retriable action avoids either blocking the
-    upload response on Gemini or conflating the two very different
+    upload response on OpenAI or conflating the two very different
     failure modes. No background worker is introduced -- this runs
     synchronously within the request, which is sufficient at this
     milestone's scale (see README).

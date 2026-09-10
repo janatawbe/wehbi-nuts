@@ -97,7 +97,7 @@ def _encode_crop(image: Image.Image, box_px: tuple[int, int, int, int]) -> bytes
 def _detect_products_for_image(
     image_path: Path, analyzer: AIProductAnalyzer
 ) -> list[_PendingProduct]:
-    """Run one Gemini call for `image_path` and return crop-ready pending
+    """Run one AI call for `image_path` and return crop-ready pending
     products. Raises AIAnalysisError only for a failure that affects the
     *whole* image (the API call itself failing, or the response overall
     not parsing) -- callers treat that as this one source image failing,
@@ -139,9 +139,9 @@ def _detect_products_for_image(
 def process_digitization_job(
     db: Session, upload_root: Path, job_id: uuid.UUID, analyzer: AIProductAnalyzer
 ) -> DigitizationJob:
-    """Run Gemini-based product digitization for every source image in a job.
+    """Run AI-based product digitization for every source image in a job.
 
-    One Gemini request per source image (never per detected product).
+    One AI request per source image (never per detected product).
     Rerunning is safe: previous candidates and crop files for this job are
     replaced, never accumulated. If digitization for every image fails,
     the job is marked FAILED; if some (or all) images succeed -- including
@@ -171,8 +171,8 @@ def process_digitization_job(
             pending.extend(_detect_products_for_image(source_dir / source_filename, analyzer))
         except AIAnalysisError as exc:
             # AIAnalysisError messages are constructed to be client-safe
-            # (see app/services/ai/errors.py) -- e.g. "Gemini's free-tier
-            # rate limit was exceeded..." -- so surfacing the real reason
+            # (see app/services/ai/errors.py) -- e.g. "OpenAI's rate limit
+            # was exceeded..." -- so surfacing the real reason
             # here, instead of only a generic "processing failed", is what
             # lets the frontend show something actionable.
             failed_count += 1

@@ -9,5 +9,5 @@ psycopg[binary]==3.3.5
 pillow==12.3.0
 python-multipart==0.0.32
 
-# Gemini vision digitizer (Milestone 4).
-google-genai==2.22.0
+# AI vision digitizer (Milestone 4).
+openai==3.11.0

@@ -1,4 +1,4 @@
-"""add gemini digitizer fields to digitized_products
+"""add ai digitizer fields to digitized_products
 
 Revision ID: a1f3c9d4e6b2
 Revises: c02c05b2c953

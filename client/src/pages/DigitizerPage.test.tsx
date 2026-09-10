@@ -213,7 +213,7 @@ describe('DigitizerPage', () => {
     expect(await screen.findByText('No digitization jobs yet.')).toBeInTheDocument()
   })
 
-  // --- Milestone 4: selecting a job and processing it with Gemini --------
+  // --- Milestone 4: selecting a job and processing it with AI --------
 
   it('shows a placeholder until a job is selected', async () => {
     render(<DigitizerPage />)
@@ -232,14 +232,14 @@ describe('DigitizerPage', () => {
     expect(digitizerApi.getDigitizerJob).toHaveBeenCalledWith('job-pending-1')
   })
 
-  it('shows a "Process with Gemini" button for a pending job', async () => {
+  it('shows a "Process with AI" button for a pending job', async () => {
     vi.mocked(digitizerApi.listDigitizerJobs).mockResolvedValue([PENDING_JOB])
     vi.mocked(digitizerApi.getDigitizerJob).mockResolvedValue(PENDING_JOB)
 
     render(<DigitizerPage />)
     fireEvent.click(await screen.findByText('job-pend'))
 
-    expect(await screen.findByRole('button', { name: /process with gemini/i })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: /process with ai/i })).toBeInTheDocument()
   })
 
   it('does not show the process button for a job already processing', async () => {
@@ -251,10 +251,10 @@ describe('DigitizerPage', () => {
     fireEvent.click(await screen.findByText('job-pend'))
 
     await screen.findByTestId('job-details')
-    expect(screen.queryByRole('button', { name: /process with gemini/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /process with ai/i })).not.toBeInTheDocument()
   })
 
-  it('clicking "Process with Gemini" calls the process endpoint and shows a processing state', async () => {
+  it('clicking "Process with AI" calls the process endpoint and shows a processing state', async () => {
     vi.mocked(digitizerApi.listDigitizerJobs).mockResolvedValue([PENDING_JOB])
     vi.mocked(digitizerApi.getDigitizerJob).mockResolvedValue(PENDING_JOB)
     let resolveProcess!: (job: DigitizerJob) => void
@@ -266,7 +266,7 @@ describe('DigitizerPage', () => {
 
     render(<DigitizerPage />)
     fireEvent.click(await screen.findByText('job-pend'))
-    fireEvent.click(await screen.findByRole('button', { name: /process with gemini/i }))
+    fireEvent.click(await screen.findByRole('button', { name: /process with ai/i }))
 
     expect(digitizerApi.processDigitizerJob).toHaveBeenCalledWith('job-pending-1')
     expect(await screen.findByTestId('job-processing')).toBeInTheDocument()
@@ -342,7 +342,7 @@ describe('DigitizerPage', () => {
 
     render(<DigitizerPage />)
     fireEvent.click(await screen.findByText('job-pend'))
-    fireEvent.click(await screen.findByRole('button', { name: /process with gemini/i }))
+    fireEvent.click(await screen.findByRole('button', { name: /process with ai/i }))
 
     expect(await screen.findByTestId('job-process-error')).toHaveTextContent(
       'The AI digitization service is not configured.',

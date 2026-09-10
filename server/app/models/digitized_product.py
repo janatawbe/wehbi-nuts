@@ -78,7 +78,7 @@ class DigitizedProduct(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         default=ReviewStatus.DRAFT,
     )
 
-    # Gemini vision-digitizer fields (Milestone 4). `category_suggestion` is
+    # AI vision-digitizer fields (Milestone 4). `category_suggestion` is
     # the AI's raw, unvalidated category text -- distinct from `category_id`,
     # which stays NULL until a human links this draft to a real `Category`.
     category_suggestion: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -101,7 +101,7 @@ class DigitizedProduct(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     visible_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    # Pixel-space bounding box within `source_image`, derived from Gemini's
+    # Pixel-space bounding box within `source_image`, derived from the AI's
     # normalized [0, 1000] coordinates -- kept in pixel space so displaying
     # or re-cropping never needs the original image dimensions again.
     bbox_x: Mapped[int | None] = mapped_column(Integer, nullable=True)

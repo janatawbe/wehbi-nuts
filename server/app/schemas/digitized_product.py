@@ -27,7 +27,7 @@ class DigitizedProductBase(BaseModel):
     ai_raw_result: dict[str, Any] | None = None
     review_status: ReviewStatus = ReviewStatus.DRAFT
 
-    # Gemini vision-digitizer fields (Milestone 4).
+    # AI vision-digitizer fields (Milestone 4).
     category_suggestion: str | None = Field(default=None, max_length=255)
     presentation: PresentationType | None = None
     identification_basis: IdentificationBasis | None = None

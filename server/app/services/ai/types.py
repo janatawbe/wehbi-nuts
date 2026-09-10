@@ -7,9 +7,9 @@ from pydantic import BaseModel, Field, field_validator
 # bbox coordinate convention: [ymin, xmin, ymax, xmax], each an integer in
 # [0, 1000], normalized to the full source image regardless of its actual
 # pixel dimensions (0,0 = top-left corner, 1000,1000 = bottom-right corner).
-# This is the convention validated in the Gemini proof-of-concept and is
-# provider-agnostic by construction -- any future AIProductAnalyzer
-# implementation must normalize its own output to this same range.
+# This convention is provider-agnostic by construction -- any
+# AIProductAnalyzer implementation must normalize its own output to this
+# same range.
 
 PresentationValue = Literal["packaged", "jar", "bottle", "bulk_tray", "bulk_loose", "other"]
 IdentificationBasisValue = Literal["visual", "text", "visual_and_text"]

@@ -160,7 +160,7 @@ export function DigitizerPage() {
           <h2 className="text-xl font-semibold text-stone-900">AI Product Digitizer</h2>
           <p className="mt-1 text-sm text-stone-600">
             Upload shelf or product photos to create a digitization job. Once uploaded, select the
-            job below and process it with Gemini to detect sellable products and review the
+            job below and process it with AI to detect sellable products and review the
             results.
           </p>
 

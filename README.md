@@ -111,9 +111,9 @@ runtime and are **not** committed — `.gitignore` excludes everything under
 that path except a `.gitkeep` placeholder that keeps the folder present in
 a fresh clone.
 
-## Milestone 4 — Gemini AI Digitizer (current scope)
+## Milestone 4 — AI Digitizer (current scope)
 
-Runs Gemini vision analysis over each source image in a job and turns the
+Runs an AI vision analysis over each source image in a job and turns the
 sellable inventory units it finds into `DigitizedProduct` drafts, cropped
 from the original photo. This milestone intentionally does **not**
 include:
@@ -121,8 +121,9 @@ include:
 - A product review/approval UI (Milestone 7)
 - Storefront, cart, checkout, or admin dashboard features
 - More than one AI request per source image (never one per detected item)
+- Any classical computer-vision object detection
 
-### Why Gemini
+### Why a vision LLM
 
 Product photos in this business are highly varied: a sealed package, a
 jar or bottle, a whole tray of loose bulk product, or a close-up filling
@@ -132,21 +133,50 @@ or region happens to be — a tray of many small pieces is one item; a
 jar's cap or sticker is not a second item. A vision-capable LLM can
 reason about a photo in exactly those terms directly: given one full shop
 photo and instructions written around *sellable inventory units* (see
-below), Gemini returns the complete package/jar/bottle/tray as one item,
+below), it returns the complete package/jar/bottle/tray as one item,
 keeps genuinely different products separate, and can additionally supply
 a product identity from the same pass.
 
-Gemini output is still just a **draft** (see "Data quality" below); the
+The output is still just a **draft** (see "Data quality" below); the
 architecture is deliberately built around a narrow `AIProductAnalyzer`
-interface (`app/services/ai/types.py`) so this specific choice of
-provider/model is not baked into the rest of the app.
+interface (`app/services/ai/types.py`) so the specific choice of
+provider/model is not baked into the rest of the app -- swapping
+providers means writing one new class behind that interface, not touching
+the processing pipeline, the API, or the database layer.
 
-### What Gemini is asked to detect
+### Provider and model: OpenAI, `gpt-4o-mini`
 
-The system instruction (`app/services/ai/gemini_vision_digitizer.py`)
-tells Gemini it is digitizing inventory for a nuts/coffee/sweets/snacks/
-dried-food roastery shop, and to reason in terms of **sellable inventory
-units**, not every visually distinct object:
+`OpenAIVisionDigitizer` (`app/services/ai/openai_vision_digitizer.py`)
+implements `AIProductAnalyzer` using the OpenAI Responses API
+(`client.responses.parse`). The model is configurable
+(`OPENAI_MODEL`, default `gpt-4o-mini`), chosen deliberately on cost
+grounds and verified live (via `client.models.list()`) rather than
+assumed:
+
+- Confirmed to support image input and strict structured JSON output.
+- Priced at $0.15 / $0.60 per million input/output tokens -- cheaper on
+  both axes than every other candidate confirmed to reliably support
+  both vision and structured outputs at the time this was written (e.g.
+  a contemporary "cost-efficient tier" model was $0.20 / $1.20/M). A
+  nominally cheaper option existed, but its structured-output support
+  was inconsistently documented across sources, and this pipeline
+  depends entirely on structured output actually working -- not worth
+  the risk for a fractional-cent-per-image saving.
+- Not a "reasoning" model, so it never spends tokens on hidden reasoning
+  output before answering -- a real, material cost driver observed with
+  reasoning-style models -- keeping per-image cost small and
+  predictable.
+
+Cost is bounded further by keeping the system prompt concise, requesting
+no explanation/commentary text, and capping `max_output_tokens` (2000 --
+generous for a busy multi-item shelf, but not unbounded).
+
+### What the AI is asked to detect
+
+The instructions given to the model tell it it is digitizing inventory
+for a nuts/coffee/sweets/snacks/dried-food roastery shop, and to reason
+in terms of **sellable inventory units**, not every visually distinct
+object:
 
 - a whole package/bag/box is one item (its label/logo is not a separate item)
 - a whole jar/container is one item (its lid/sticker/cap is not)
@@ -158,7 +188,7 @@ units**, not every visually distinct object:
 - shelves, dividers, price tags, logos-as-objects, and decorations are
   ignored entirely
 
-Gemini may visually infer a likely product identity when there is no
+The model may visually infer a likely product identity when there is no
 readable text at all (common for loose bulk products) — but it must never
 present a visual guess as if it were read from text. `identification_basis`
 (`visual` / `text` / `visual_and_text`) makes that distinction explicit in
@@ -167,13 +197,19 @@ model isn't sure, rather than a confident-sounding invented name.
 
 ### Structured output & bounding-box convention
 
-Gemini is asked for one JSON object per image: `{"items": [...]}`, each
-item validated (both by Gemini's structured-output mode *and* again
-independently with Pydantic on the server, since a model's "structured
-output" is a strong hint, not a guarantee) against
-`app.services.ai.types.DetectedProduct`: `name_en`, `name_ar`, `category`,
-`presentation` (`packaged`/`jar`/`bottle`/`bulk_tray`/`bulk_loose`/`other`),
-`bbox`, `confidence` (0-1), `visible_text`, `identification_basis`, `notes`.
+The model returns one JSON object per image: `{"items": [...]}`, requested
+via OpenAI's native structured-output mode (a Pydantic `text_format`
+passed straight to `client.responses.parse` — never parsed from free-form
+prose) and then re-validated independently with Pydantic on the server
+against `app.services.ai.types.DetectedProduct`: `name_en`, `name_ar`,
+`category`, `presentation`
+(`packaged`/`jar`/`bottle`/`bulk_tray`/`bulk_loose`/`other`), `bbox`,
+`confidence` (0-1), `visible_text`, `identification_basis`, `notes`. This
+double-checking matters in practice: OpenAI's strict JSON schema mode
+guarantees field *shape*, not this project's own cross-field business
+rules (e.g. bbox `ymin < ymax`), which are plain Python validators no
+schema can express — a schema-valid-but-business-invalid response is
+treated the same as a malformed one, not silently accepted.
 
 `bbox` is `[ymin, xmin, ymax, xmax]`, each an integer normalized to
 **0-1000** relative to the full image regardless of its actual pixel size
@@ -194,7 +230,7 @@ synchronous while processing is an explicit, separately-retriable action.
 No background worker is introduced — it runs synchronously within the
 request, which is sufficient at this milestone's scale.
 
-For each source image: one Gemini request → each returned item's bbox is
+For each source image: one AI request → each returned item's bbox is
 converted to pixel space and clamped → cropped from the **original**
 image (`Image.crop`, no resizing/upscaling/resampling, so the crop's
 aspect ratio always matches its bbox exactly) → encoded as JPEG and
@@ -236,49 +272,49 @@ all indistinguishable from "not found" in the response.
 Milestone 2's `DigitizedProduct` model already had `job_id`,
 `source_image`, `crop_image`, `ai_confidence`, `ai_raw_result`,
 `needs_review`, and `review_status` — all reused as-is. One migration
-(`alembic/versions/a1f3c9d4e6b2_*.py`) adds the fields Gemini's output
-needed that didn't already exist: `category_suggestion` (Gemini's raw
+(`alembic/versions/a1f3c9d4e6b2_*.py`) adds the fields the AI's output
+needed that didn't already exist: `category_suggestion` (the model's raw
 category text, kept distinct from the human-assigned `category_id` FK),
 `presentation`, `identification_basis`, `visible_text`, `notes`, and
-pixel-space `bbox_x`/`bbox_y`/`bbox_width`/`bbox_height`.
+pixel-space `bbox_x`/`bbox_y`/`bbox_width`/`bbox_height`. None of these
+are provider-specific — the same columns would be populated by any
+`AIProductAnalyzer` implementation.
 
 ### Error handling & retries
 
-`GeminiVisionDigitizer` retries a transient server error (e.g. `503`) up
-to 3 times with a short backoff; **a `429` rate-limit/quota error is
-retried the same way** (see below); any other client error (bad request,
-invalid key, unknown model) is never retried, since it will not resolve
-itself. Either way, only a client-safe
-`AIServiceUnavailableError`/`AIInvalidResponseError` message ever
-propagates — never a raw SDK exception or the API key. One source
-image's AI failure (unreachable service, malformed/invalid response,
-corrupt/unreadable image) is recorded as a failed image and does not stop
-the rest of the job from processing; the job's `error_message` includes
-that specific reason (for a known, client-safe `AIAnalysisError`) rather
-than only the generic "processing failed."
+`OpenAIVisionDigitizer` retries a rate-limit (`429`) or a transient
+server-side error (timeout, connection failure, `5xx`) up to 3 times with
+a short backoff; any other client error (bad request, invalid key,
+unknown model, a permission/billing rejection that isn't a plain rate
+limit) is never retried, since it will not resolve itself. Either way,
+only a client-safe `AIServiceUnavailableError`/`AIInvalidResponseError`
+message ever propagates — never a raw SDK exception or the API key. One
+source image's AI failure (unreachable service, malformed/invalid
+response, corrupt/unreadable image) is recorded as a failed image and
+does not stop the rest of the job from processing; the job's
+`error_message` includes that specific reason (for a known, client-safe
+`AIAnalysisError`) rather than only a generic "processing failed."
 
-**Production incident, root-caused and fixed:** some real jobs failed
-immediately (~5s) with only "Digitization failed for all source images."
-and no further detail. Root cause: the Gemini free tier enforces a low
-per-model daily request quota (observed: 20 requests/day for
-`gemini-3.6-flash`) and responds with HTTP `429`, which the SDK
-classifies as a `ClientError` — the same exception class used for a
-genuinely bad request. The code treated every `ClientError` as
-non-retryable, so a rate-limited image failed instantly with a message
-that gave no indication it was a quota issue rather than a bug. Fixed by
-retrying a `429` the same way as a `503` (bounded, same attempt count),
-and by having the exhausted-retries message explicitly name the free-tier
-rate limit as the cause, surfaced all the way to the job's
-`error_message`. Retrying cannot make a fully-exhausted *daily* quota
-succeed sooner, by definition — if every attempt still reports 429, wait
-for the quota to reset (or reduce concurrent processing) rather than
-retrying the job repeatedly.
+A `429` specifically covers two different situations that need different
+handling: a short-lived rate limit (where a quick retry plausibly helps)
+versus an exhausted billing/quota balance (where no amount of retrying
+can help). Both are retried the same bounded number of times regardless
+— retrying cannot make a genuinely empty balance succeed sooner, so
+there's no reason to treat it differently on that axis — but the
+*message* after retries are exhausted names the real cause. This
+distinction was verified directly against a real account with zero
+credits during development: the error's `type` field read
+`"insufficient_quota"` but its `code` field read
+`"credit_balance_exhausted"`, not the `"insufficient_quota"` code shown in
+some documentation examples — so both fields are checked for a family of
+related terms rather than one exact expected string, since the precise
+value OpenAI sends is evidently not perfectly stable.
 
 ### Data quality: drafts, not truth
 
 Every `DigitizedProduct` created here is `review_status=DRAFT` with
 `needs_review=True` and `product_id=NULL` — nothing in this milestone
-creates or modifies a real, sellable `Product`. Gemini's identification
+creates or modifies a real, sellable `Product`. The AI's identification
 (including a purely visual guess for an unlabeled bulk product) is always
 a draft for a human to confirm, never treated as verified fact.
 
@@ -317,9 +353,9 @@ wehbi-nuts/
 │   │   ├── models/                 # SQLAlchemy models + enums
 │   │   ├── schemas/                # Pydantic create/update/read schemas
 │   │   └── services/
-│   │       ├── ai/                  # AIProductAnalyzer + GeminiVisionDigitizer
+│   │       ├── ai/                  # AIProductAnalyzer + OpenAIVisionDigitizer
 │   │       ├── digitizer_service.py            # upload (Milestone 3)
-│   │       ├── digitizer_processing_service.py # Gemini processing (Milestone 4)
+│   │       ├── digitizer_processing_service.py # AI processing (Milestone 4)
 │   │       └── storage.py
 │   ├── alembic/                    # Migration environment
 │   │   └── versions/                # Migration scripts
