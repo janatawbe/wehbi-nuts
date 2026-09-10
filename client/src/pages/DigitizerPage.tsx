@@ -151,12 +151,12 @@ export function DigitizerPage() {
   }
 
   return (
-    <div className="min-h-screen bg-stone-50 px-6 py-10">
-      <div className="mx-auto max-w-2xl">
+    <div className="min-h-dvh bg-stone-50 px-4 py-10 sm:px-6 lg:px-8">
+      <div className="mx-auto max-w-6xl">
         <h1 className="text-3xl font-bold text-stone-900">Wehbi Nuts</h1>
         <p className="mt-1 text-stone-600">E-commerce Store: coming in a future milestone.</p>
 
-        <section className="mt-8 rounded-lg border border-stone-200 bg-white p-6 shadow-sm">
+        <section className="mt-8 rounded-lg border border-stone-200 bg-white p-4 shadow-sm sm:p-6">
           <h2 className="text-xl font-semibold text-stone-900">AI Product Digitizer</h2>
           <p className="mt-1 text-sm text-stone-600">
             Upload shelf or product photos to create a digitization job. Once uploaded, select the
@@ -171,7 +171,9 @@ export function DigitizerPage() {
           {fileErrors.length > 0 && (
             <ul className="mt-3 space-y-1 text-sm text-red-600" data-testid="file-errors">
               {fileErrors.map((message) => (
-                <li key={message}>{message}</li>
+                <li key={message} className="break-words">
+                  {message}
+                </li>
               ))}
             </ul>
           )}
@@ -188,13 +190,13 @@ export function DigitizerPage() {
             type="button"
             onClick={handleSubmit}
             disabled={uploading || selectedFiles.length === 0}
-            className="mt-4 rounded-md bg-emerald-600 px-4 py-2 font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+            className="mt-4 w-full rounded-md bg-emerald-600 px-4 py-2.5 font-medium text-white disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
           >
             {uploading ? 'Uploading...' : 'Upload photos'}
           </button>
 
           {uploadError && (
-            <p className="mt-3 text-sm text-red-600" data-testid="upload-error">
+            <p className="mt-3 break-words text-sm text-red-600" data-testid="upload-error">
               {uploadError}
             </p>
           )}
@@ -207,29 +209,31 @@ export function DigitizerPage() {
           )}
         </section>
 
-        <section className="mt-8 rounded-lg border border-stone-200 bg-white p-6 shadow-sm">
-          <h2 className="text-lg font-semibold text-stone-900">Recent digitization jobs</h2>
-          <p className="mt-1 text-sm text-stone-500">Select a job to view its details and process it.</p>
-          <JobHistory
-            jobs={jobs}
-            loading={jobsLoading}
-            error={jobsError}
-            selectedJobId={selectedJobId}
-            onSelect={handleSelectJob}
-          />
-        </section>
+        <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-3">
+          <section className="min-w-0 rounded-lg border border-stone-200 bg-white p-4 shadow-sm sm:p-6 lg:col-span-1">
+            <h2 className="text-lg font-semibold text-stone-900">Recent digitization jobs</h2>
+            <p className="mt-1 text-sm text-stone-500">Select a job to view its details and process it.</p>
+            <JobHistory
+              jobs={jobs}
+              loading={jobsLoading}
+              error={jobsError}
+              selectedJobId={selectedJobId}
+              onSelect={handleSelectJob}
+            />
+          </section>
 
-        <section className="mt-8 rounded-lg border border-stone-200 bg-white p-6 shadow-sm">
-          <h2 className="text-lg font-semibold text-stone-900">Job details</h2>
-          <JobDetails
-            job={selectedJob}
-            loading={jobDetailsLoading}
-            error={jobDetailsError}
-            processing={processing}
-            processError={processError}
-            onProcess={handleProcess}
-          />
-        </section>
+          <section className="min-w-0 rounded-lg border border-stone-200 bg-white p-4 shadow-sm sm:p-6 lg:col-span-2">
+            <h2 className="text-lg font-semibold text-stone-900">Job details</h2>
+            <JobDetails
+              job={selectedJob}
+              loading={jobDetailsLoading}
+              error={jobDetailsError}
+              processing={processing}
+              processError={processError}
+              onProcess={handleProcess}
+            />
+          </section>
+        </div>
       </div>
     </div>
   )

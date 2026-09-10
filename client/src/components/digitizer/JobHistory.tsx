@@ -35,16 +35,20 @@ export function JobHistory({
             type="button"
             onClick={() => onSelect?.(job.id)}
             aria-pressed={job.id === selectedJobId}
-            className={`flex w-full flex-wrap items-center justify-between gap-2 py-2 text-left text-sm hover:bg-stone-50 ${
+            className={`flex w-full flex-col gap-1 py-3 text-left text-sm hover:bg-stone-50 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:gap-2 sm:py-2 ${
               job.id === selectedJobId ? 'bg-emerald-50' : ''
             }`}
           >
-            <span className="font-mono text-stone-500">{job.id.slice(0, 8)}</span>
-            <span className="capitalize">{job.status}</span>
-            <span>
-              {job.total_items} image{job.total_items === 1 ? '' : 's'}
+            <span className="flex items-center justify-between gap-2 sm:contents">
+              <span className="font-mono text-stone-500">{job.id.slice(0, 8)}</span>
+              <span className="capitalize">{job.status}</span>
             </span>
-            <span className="text-stone-500">{new Date(job.created_at).toLocaleString()}</span>
+            <span className="flex items-center justify-between gap-2 sm:contents">
+              <span>
+                {job.total_items} image{job.total_items === 1 ? '' : 's'}
+              </span>
+              <span className="text-stone-500">{new Date(job.created_at).toLocaleString()}</span>
+            </span>
           </button>
         </li>
       ))}

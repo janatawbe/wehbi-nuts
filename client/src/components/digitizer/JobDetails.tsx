@@ -14,7 +14,10 @@ const PROCESSABLE_STATUSES = new Set(['pending', 'failed'])
 
 function ProductCard({ jobId, product }: { jobId: string; product: DigitizedProduct }) {
   return (
-    <li className="rounded-md border border-stone-200 p-3" data-testid="digitized-product">
+    <li
+      className="min-w-0 rounded-md border border-stone-200 p-3"
+      data-testid="digitized-product"
+    >
       {product.crop_image && (
         <img
           src={getDigitizerMediaUrl(jobId, 'products', product.crop_image)}
@@ -22,41 +25,45 @@ function ProductCard({ jobId, product }: { jobId: string; product: DigitizedProd
           className="mb-2 h-32 w-full rounded object-contain bg-stone-100"
         />
       )}
-      <p className="font-medium text-stone-900">{product.name_en ?? 'Unnamed product'}</p>
-      {product.name_ar && <p dir="rtl" className="text-stone-700">{product.name_ar}</p>}
+      <p className="break-words font-medium text-stone-900">{product.name_en ?? 'Unnamed product'}</p>
+      {product.name_ar && (
+        <p dir="rtl" lang="ar" className="break-words text-stone-700">
+          {product.name_ar}
+        </p>
+      )}
       <dl className="mt-2 space-y-0.5 text-xs text-stone-600">
         {product.category_suggestion && (
-          <div>
+          <div className="break-words">
             <dt className="inline font-medium">Category: </dt>
             <dd className="inline">{product.category_suggestion}</dd>
           </div>
         )}
         {product.presentation && (
-          <div>
+          <div className="break-words">
             <dt className="inline font-medium">Presentation: </dt>
             <dd className="inline">{product.presentation}</dd>
           </div>
         )}
         {product.ai_confidence && (
-          <div>
+          <div className="break-words">
             <dt className="inline font-medium">Confidence: </dt>
             <dd className="inline">{Math.round(Number(product.ai_confidence) * 100)}%</dd>
           </div>
         )}
         {product.identification_basis && (
-          <div>
+          <div className="break-words">
             <dt className="inline font-medium">Identification basis: </dt>
             <dd className="inline">{product.identification_basis.replace(/_/g, ' ')}</dd>
           </div>
         )}
         {product.visible_text && (
-          <div>
+          <div className="break-words">
             <dt className="inline font-medium">Visible text: </dt>
             <dd className="inline">{product.visible_text}</dd>
           </div>
         )}
         {product.notes && (
-          <div>
+          <div className="break-words">
             <dt className="inline font-medium">Notes: </dt>
             <dd className="inline">{product.notes}</dd>
           </div>
@@ -80,7 +87,7 @@ export function JobDetails({
 
   if (error) {
     return (
-      <p className="mt-3 text-sm text-red-600" data-testid="job-details-error">
+      <p className="mt-3 break-words text-sm text-red-600" data-testid="job-details-error">
         {error}
       </p>
     )
@@ -94,7 +101,7 @@ export function JobDetails({
 
   return (
     <div className="mt-3" data-testid="job-details">
-      <div className="flex flex-wrap items-center justify-between gap-2">
+      <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:gap-2">
         <p className="text-sm">
           Status: <span className="font-medium capitalize">{job.status}</span>
           {' -- '}
@@ -105,7 +112,7 @@ export function JobDetails({
           <button
             type="button"
             onClick={onProcess}
-            className="rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+            className="w-full rounded-md bg-emerald-600 px-3 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
           >
             Process with Gemini
           </button>
@@ -119,19 +126,19 @@ export function JobDetails({
       )}
 
       {processError && (
-        <p className="mt-2 text-sm text-red-600" data-testid="job-process-error">
+        <p className="mt-2 break-words text-sm text-red-600" data-testid="job-process-error">
           {processError}
         </p>
       )}
 
       {job.status === 'failed' && job.error_message && (
-        <p className="mt-2 text-sm text-red-600" data-testid="job-error-message">
+        <p className="mt-2 break-words text-sm text-red-600" data-testid="job-error-message">
           {job.error_message}
         </p>
       )}
 
       {job.status === 'completed' && job.failed_items > 0 && job.error_message && (
-        <p className="mt-2 text-sm text-amber-700" data-testid="job-partial-error">
+        <p className="mt-2 break-words text-sm text-amber-700" data-testid="job-partial-error">
           {job.error_message}
         </p>
       )}
@@ -144,7 +151,10 @@ export function JobDetails({
           {job.candidates.length === 0 ? (
             <p className="mt-1 text-sm text-stone-500">No sellable products were detected.</p>
           ) : (
-            <ul className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2" data-testid="digitized-products-list">
+            <ul
+              className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3"
+              data-testid="digitized-products-list"
+            >
               {job.candidates.map((product) => (
                 <ProductCard key={product.id} jobId={job.id} product={product} />
               ))}
