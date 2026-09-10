@@ -33,3 +33,7 @@ desktop.ini
 # --- Logs ---
 *.log
 npm-debug.log*
+
+# Local validation images
+test-data/real-shop-images/
+test-data/generated-shop-images/
