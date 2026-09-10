@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useState } from 'react'
-import { DigitizerApiError, listDigitizerJobs, uploadDigitizerJob } from '../api/digitizer'
+import {
+  DigitizerApiError,
+  getDigitizerJob,
+  listDigitizerJobs,
+  processDigitizerJob,
+  uploadDigitizerJob,
+} from '../api/digitizer'
 import { FileDropzone } from '../components/digitizer/FileDropzone'
+import { JobDetails } from '../components/digitizer/JobDetails'
 import { JobHistory } from '../components/digitizer/JobHistory'
 import { SelectedFileList } from '../components/digitizer/SelectedFileList'
 import {
@@ -52,6 +59,13 @@ export function DigitizerPage() {
   const [jobsLoading, setJobsLoading] = useState(true)
   const [jobsError, setJobsError] = useState<string | null>(null)
 
+  const [selectedJobId, setSelectedJobId] = useState<string | null>(null)
+  const [selectedJob, setSelectedJob] = useState<DigitizerJob | null>(null)
+  const [jobDetailsLoading, setJobDetailsLoading] = useState(false)
+  const [jobDetailsError, setJobDetailsError] = useState<string | null>(null)
+  const [processing, setProcessing] = useState(false)
+  const [processError, setProcessError] = useState<string | null>(null)
+
   const refreshJobs = useCallback(async () => {
     setJobsLoading(true)
     setJobsError(null)
@@ -68,6 +82,42 @@ export function DigitizerPage() {
   useEffect(() => {
     refreshJobs()
   }, [refreshJobs])
+
+  const handleSelectJob = useCallback(async (jobId: string) => {
+    setSelectedJobId(jobId)
+    setProcessError(null)
+    setJobDetailsLoading(true)
+    setJobDetailsError(null)
+    try {
+      const job = await getDigitizerJob(jobId)
+      setSelectedJob(job)
+    } catch (err) {
+      setSelectedJob(null)
+      setJobDetailsError(
+        err instanceof DigitizerApiError ? err.message : 'Could not load job details.',
+      )
+    } finally {
+      setJobDetailsLoading(false)
+    }
+  }, [])
+
+  const handleProcess = async () => {
+    if (!selectedJobId || processing) return
+
+    setProcessing(true)
+    setProcessError(null)
+    try {
+      const job = await processDigitizerJob(selectedJobId)
+      setSelectedJob(job)
+      await refreshJobs()
+    } catch (err) {
+      setProcessError(
+        err instanceof DigitizerApiError ? err.message : 'Processing failed. Please try again.',
+      )
+    } finally {
+      setProcessing(false)
+    }
+  }
 
   const handleFilesSelected = (incoming: File[]) => {
     const { valid, errors } = validateFiles(incoming, selectedFiles.length)
@@ -109,9 +159,9 @@ export function DigitizerPage() {
         <section className="mt-8 rounded-lg border border-stone-200 bg-white p-6 shadow-sm">
           <h2 className="text-xl font-semibold text-stone-900">AI Product Digitizer</h2>
           <p className="mt-1 text-sm text-stone-600">
-            Upload shelf or product photos to start digitizing them. This step only uploads your
-            photos and creates a digitization job -- automatic product recognition happens in a
-            later milestone.
+            Upload shelf or product photos to create a digitization job. Once uploaded, select the
+            job below and process it with Gemini to detect sellable products and review the
+            results.
           </p>
 
           <div className="mt-4">
@@ -159,7 +209,26 @@ export function DigitizerPage() {
 
         <section className="mt-8 rounded-lg border border-stone-200 bg-white p-6 shadow-sm">
           <h2 className="text-lg font-semibold text-stone-900">Recent digitization jobs</h2>
-          <JobHistory jobs={jobs} loading={jobsLoading} error={jobsError} />
+          <p className="mt-1 text-sm text-stone-500">Select a job to view its details and process it.</p>
+          <JobHistory
+            jobs={jobs}
+            loading={jobsLoading}
+            error={jobsError}
+            selectedJobId={selectedJobId}
+            onSelect={handleSelectJob}
+          />
+        </section>
+
+        <section className="mt-8 rounded-lg border border-stone-200 bg-white p-6 shadow-sm">
+          <h2 className="text-lg font-semibold text-stone-900">Job details</h2>
+          <JobDetails
+            job={selectedJob}
+            loading={jobDetailsLoading}
+            error={jobDetailsError}
+            processing={processing}
+            processError={processError}
+            onProcess={handleProcess}
+          />
         </section>
       </div>
     </div>

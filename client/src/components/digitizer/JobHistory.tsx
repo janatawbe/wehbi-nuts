@@ -4,9 +4,17 @@ interface JobHistoryProps {
   jobs: DigitizerJob[]
   loading?: boolean
   error?: string | null
+  selectedJobId?: string | null
+  onSelect?: (jobId: string) => void
 }
 
-export function JobHistory({ jobs, loading = false, error = null }: JobHistoryProps) {
+export function JobHistory({
+  jobs,
+  loading = false,
+  error = null,
+  selectedJobId = null,
+  onSelect,
+}: JobHistoryProps) {
   if (loading) {
     return <p className="text-sm text-stone-500">Loading job history...</p>
   }
@@ -22,13 +30,22 @@ export function JobHistory({ jobs, loading = false, error = null }: JobHistoryPr
   return (
     <ul className="mt-3 divide-y divide-stone-200" data-testid="job-history-list">
       {jobs.map((job) => (
-        <li key={job.id} className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
-          <span className="font-mono text-stone-500">{job.id.slice(0, 8)}</span>
-          <span className="capitalize">{job.status}</span>
-          <span>
-            {job.total_items} image{job.total_items === 1 ? '' : 's'}
-          </span>
-          <span className="text-stone-500">{new Date(job.created_at).toLocaleString()}</span>
+        <li key={job.id}>
+          <button
+            type="button"
+            onClick={() => onSelect?.(job.id)}
+            aria-pressed={job.id === selectedJobId}
+            className={`flex w-full flex-wrap items-center justify-between gap-2 py-2 text-left text-sm hover:bg-stone-50 ${
+              job.id === selectedJobId ? 'bg-emerald-50' : ''
+            }`}
+          >
+            <span className="font-mono text-stone-500">{job.id.slice(0, 8)}</span>
+            <span className="capitalize">{job.status}</span>
+            <span>
+              {job.total_items} image{job.total_items === 1 ? '' : 's'}
+            </span>
+            <span className="text-stone-500">{new Date(job.created_at).toLocaleString()}</span>
+          </button>
         </li>
       ))}
     </ul>

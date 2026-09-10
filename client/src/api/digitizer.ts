@@ -65,3 +65,27 @@ export async function getDigitizerJob(jobId: string): Promise<DigitizerJob> {
 
   return (await response.json()) as DigitizerJob
 }
+
+export async function processDigitizerJob(jobId: string): Promise<DigitizerJob> {
+  const response = await fetch(`${API_BASE_URL}/api/digitizer/jobs/${jobId}/process`, {
+    method: 'POST',
+  })
+
+  if (!response.ok) {
+    throw new DigitizerApiError(await parseErrorMessage(response), response.status)
+  }
+
+  return (await response.json()) as DigitizerJob
+}
+
+/** Builds a displayable URL for a job's source or crop image via the
+ * backend's safe media endpoint -- never construct a filesystem path on
+ * the client, the filename is always the server-generated name already
+ * returned by the API. */
+export function getDigitizerMediaUrl(
+  jobId: string,
+  kind: 'source' | 'products',
+  filename: string,
+): string {
+  return `${API_BASE_URL}/api/digitizer/jobs/${jobId}/media/${kind}/${filename}`
+}

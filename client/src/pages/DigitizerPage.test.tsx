@@ -10,8 +10,23 @@ vi.mock('../api/digitizer', async (importOriginal) => {
     ...actual,
     listDigitizerJobs: vi.fn(),
     uploadDigitizerJob: vi.fn(),
+    getDigitizerJob: vi.fn(),
+    processDigitizerJob: vi.fn(),
   }
 })
+
+const PENDING_JOB: DigitizerJob = {
+  id: 'job-pending-1',
+  status: 'pending',
+  total_items: 1,
+  processed_items: 0,
+  failed_items: 0,
+  error_message: null,
+  created_at: new Date().toISOString(),
+  updated_at: new Date().toISOString(),
+  source_images: ['abc123.jpg'],
+  candidates: [],
+}
 
 function makeFile(name: string, type: string, sizeBytes = 1024): File {
   return new File([new Uint8Array(sizeBytes)], name, { type })
@@ -102,6 +117,7 @@ describe('DigitizerPage', () => {
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
       source_images: ['abc123.jpg'],
+      candidates: [],
     })
 
     render(<DigitizerPage />)
@@ -147,6 +163,7 @@ describe('DigitizerPage', () => {
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
       source_images: [],
+      candidates: [],
     })
   })
 
@@ -181,6 +198,7 @@ describe('DigitizerPage', () => {
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
         source_images: [],
+        candidates: [],
       },
     ])
 
@@ -193,5 +211,141 @@ describe('DigitizerPage', () => {
     render(<DigitizerPage />)
 
     expect(await screen.findByText('No digitization jobs yet.')).toBeInTheDocument()
+  })
+
+  // --- Milestone 4: selecting a job and processing it with Gemini --------
+
+  it('shows a placeholder until a job is selected', async () => {
+    render(<DigitizerPage />)
+
+    expect(await screen.findByText('Select a job above to see its details.')).toBeInTheDocument()
+  })
+
+  it('selecting a job fetches and displays its details', async () => {
+    vi.mocked(digitizerApi.listDigitizerJobs).mockResolvedValue([PENDING_JOB])
+    vi.mocked(digitizerApi.getDigitizerJob).mockResolvedValue(PENDING_JOB)
+
+    render(<DigitizerPage />)
+    fireEvent.click(await screen.findByText('job-pend'))
+
+    expect(await screen.findByTestId('job-details')).toHaveTextContent('Status: pending')
+    expect(digitizerApi.getDigitizerJob).toHaveBeenCalledWith('job-pending-1')
+  })
+
+  it('shows a "Process with Gemini" button for a pending job', async () => {
+    vi.mocked(digitizerApi.listDigitizerJobs).mockResolvedValue([PENDING_JOB])
+    vi.mocked(digitizerApi.getDigitizerJob).mockResolvedValue(PENDING_JOB)
+
+    render(<DigitizerPage />)
+    fireEvent.click(await screen.findByText('job-pend'))
+
+    expect(await screen.findByRole('button', { name: /process with gemini/i })).toBeInTheDocument()
+  })
+
+  it('does not show the process button for a job already processing', async () => {
+    const processingJob: DigitizerJob = { ...PENDING_JOB, status: 'processing' }
+    vi.mocked(digitizerApi.listDigitizerJobs).mockResolvedValue([processingJob])
+    vi.mocked(digitizerApi.getDigitizerJob).mockResolvedValue(processingJob)
+
+    render(<DigitizerPage />)
+    fireEvent.click(await screen.findByText('job-pend'))
+
+    await screen.findByTestId('job-details')
+    expect(screen.queryByRole('button', { name: /process with gemini/i })).not.toBeInTheDocument()
+  })
+
+  it('clicking "Process with Gemini" calls the process endpoint and shows a processing state', async () => {
+    vi.mocked(digitizerApi.listDigitizerJobs).mockResolvedValue([PENDING_JOB])
+    vi.mocked(digitizerApi.getDigitizerJob).mockResolvedValue(PENDING_JOB)
+    let resolveProcess!: (job: DigitizerJob) => void
+    vi.mocked(digitizerApi.processDigitizerJob).mockReturnValue(
+      new Promise<DigitizerJob>((resolve) => {
+        resolveProcess = resolve
+      }),
+    )
+
+    render(<DigitizerPage />)
+    fireEvent.click(await screen.findByText('job-pend'))
+    fireEvent.click(await screen.findByRole('button', { name: /process with gemini/i }))
+
+    expect(digitizerApi.processDigitizerJob).toHaveBeenCalledWith('job-pending-1')
+    expect(await screen.findByTestId('job-processing')).toBeInTheDocument()
+
+    resolveProcess({ ...PENDING_JOB, status: 'completed', processed_items: 1, candidates: [] })
+    await waitFor(() => expect(screen.queryByTestId('job-processing')).not.toBeInTheDocument())
+  })
+
+  it('displays detected products with all their fields after processing completes', async () => {
+    const completedJob: DigitizerJob = {
+      ...PENDING_JOB,
+      status: 'completed',
+      processed_items: 1,
+      candidates: [
+        {
+          id: 'product-1',
+          source_image: 'abc123.jpg',
+          crop_image: 'cropfile.jpg',
+          name_en: 'Almonds',
+          name_ar: 'لوز',
+          category_suggestion: 'Nuts',
+          presentation: 'packaged',
+          ai_confidence: '0.92',
+          identification_basis: 'visual_and_text',
+          visible_text: 'ALMONDS 500G',
+          notes: 'Slightly blurry label.',
+        },
+      ],
+    }
+    vi.mocked(digitizerApi.listDigitizerJobs).mockResolvedValue([completedJob])
+    vi.mocked(digitizerApi.getDigitizerJob).mockResolvedValue(completedJob)
+
+    render(<DigitizerPage />)
+    fireEvent.click(await screen.findByText('job-pend'))
+
+    const card = await screen.findByTestId('digitized-product')
+    expect(card).toHaveTextContent('Almonds')
+    expect(card).toHaveTextContent('لوز')
+    expect(card).toHaveTextContent('Nuts')
+    expect(card).toHaveTextContent('packaged')
+    expect(card).toHaveTextContent('92%')
+    expect(card).toHaveTextContent('visual and text')
+    expect(card).toHaveTextContent('ALMONDS 500G')
+    expect(card).toHaveTextContent('Slightly blurry label.')
+    const image = card.querySelector('img')
+    expect(image).toHaveAttribute('src', expect.stringContaining('/media/products/cropfile.jpg'))
+  })
+
+  it('shows a clear error message for a failed job', async () => {
+    const failedJob: DigitizerJob = {
+      ...PENDING_JOB,
+      status: 'failed',
+      failed_items: 1,
+      error_message: 'Digitization failed for all source images.',
+    }
+    vi.mocked(digitizerApi.listDigitizerJobs).mockResolvedValue([failedJob])
+    vi.mocked(digitizerApi.getDigitizerJob).mockResolvedValue(failedJob)
+
+    render(<DigitizerPage />)
+    fireEvent.click(await screen.findByText('job-pend'))
+
+    expect(await screen.findByTestId('job-error-message')).toHaveTextContent(
+      'Digitization failed for all source images.',
+    )
+  })
+
+  it('shows an error if processing the job fails', async () => {
+    vi.mocked(digitizerApi.listDigitizerJobs).mockResolvedValue([PENDING_JOB])
+    vi.mocked(digitizerApi.getDigitizerJob).mockResolvedValue(PENDING_JOB)
+    vi.mocked(digitizerApi.processDigitizerJob).mockRejectedValue(
+      new digitizerApi.DigitizerApiError('The AI digitization service is not configured.', 503),
+    )
+
+    render(<DigitizerPage />)
+    fireEvent.click(await screen.findByText('job-pend'))
+    fireEvent.click(await screen.findByRole('button', { name: /process with gemini/i }))
+
+    expect(await screen.findByTestId('job-process-error')).toHaveTextContent(
+      'The AI digitization service is not configured.',
+    )
   })
 })
