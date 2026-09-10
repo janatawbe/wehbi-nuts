@@ -1,6 +1,15 @@
 import { render, screen } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import App from './App'
+
+vi.mock('./api/digitizer', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./api/digitizer')>()
+  return {
+    ...actual,
+    listDigitizerJobs: vi.fn().mockResolvedValue([]),
+    uploadDigitizerJob: vi.fn(),
+  }
+})
 
 describe('App', () => {
   it('renders the project name', () => {
@@ -8,9 +17,9 @@ describe('App', () => {
     expect(screen.getByText('Wehbi Nuts')).toBeInTheDocument()
   })
 
-  it('indicates the AI Shop Digitizer and E-commerce Store features', () => {
+  it('indicates the AI Product Digitizer and E-commerce Store features', () => {
     render(<App />)
-    expect(screen.getByText('AI Shop Digitizer')).toBeInTheDocument()
-    expect(screen.getByText('E-commerce Store')).toBeInTheDocument()
+    expect(screen.getByText('AI Product Digitizer')).toBeInTheDocument()
+    expect(screen.getByText(/E-commerce Store/)).toBeInTheDocument()
   })
 })

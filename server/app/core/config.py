@@ -13,6 +13,13 @@ class Settings(BaseSettings):
         "postgresql+psycopg://wehbi_nuts:wehbi_nuts@localhost:5432/wehbi_nuts"
     )
 
+    # Digitizer upload settings (Milestone 3). Paths are relative to the
+    # server/ project root unless an absolute path is given.
+    digitizer_upload_dir: str = "uploads/digitizer"
+    digitizer_max_file_size_bytes: int = 10 * 1024 * 1024  # 10 MB per image
+    digitizer_max_images_per_job: int = 20
+    digitizer_max_image_dimension: int = 8000  # pixels, width or height
+
 
 @lru_cache
 def get_settings() -> Settings:

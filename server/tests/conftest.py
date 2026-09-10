@@ -1,12 +1,17 @@
 from collections.abc import Generator
+from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import app.models  # noqa: F401  (registers all models on Base.metadata)
 from app.db.base import Base
+from app.db.session import get_db
+from app.main import app
+from app.services.storage import get_upload_root
 
 
 @pytest.fixture()
@@ -46,3 +51,25 @@ def db_session() -> Generator[Session, None, None]:
         session.close()
         Base.metadata.drop_all(bind=engine)
         engine.dispose()
+
+
+@pytest.fixture()
+def client(tmp_path: Path, db_session: Session) -> Generator[TestClient, None, None]:
+    """A TestClient wired to the isolated `db_session` and a temp upload dir.
+
+    Neither the real database nor the developer's real uploads directory is
+    ever touched by API-level tests.
+    """
+
+    def _override_get_db() -> Generator[Session, None, None]:
+        yield db_session
+
+    def _override_get_upload_root() -> Path:
+        return tmp_path / "uploads" / "digitizer"
+
+    app.dependency_overrides[get_db] = _override_get_db
+    app.dependency_overrides[get_upload_root] = _override_get_upload_root
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.clear()

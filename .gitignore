@@ -19,6 +19,10 @@ __pycache__/
 .env.*
 !.env.example
 
+# --- Digitizer runtime uploads (Milestone 3) ---
+server/uploads/digitizer/*
+!server/uploads/digitizer/.gitkeep
+
 # --- Editor / OS ---
 .vscode/
 .idea/
