@@ -67,6 +67,58 @@ class EnrichmentStatus(str, enum.Enum):
     ENRICHED = "enriched"
 
 
+class ImageRefinementStatus(str, enum.Enum):
+    """Whether Milestone 6 image refinement (Tier 1 canvas/padding/resize +
+    optional Tier 2 background isolation) has completed for a
+    DigitizedProduct. Deliberately its own field, separate from both
+    `enrichment_status` (Milestone 5) and `review_status` (Milestone 7) --
+    refinement is a third, independent pipeline stage with its own success/
+    failure outcome."""
+
+    PENDING = "pending"
+    REFINED = "refined"
+    FAILED = "failed"
+    # No crop image was available to refine from -- distinct from FAILED
+    # (an attempt that ran and didn't succeed): nothing was attempted, and
+    # retrying later without a crop would fail identically, so job-level
+    # bulk refinement marks this instead of retrying it every time.
+    SKIPPED = "skipped"
+
+
+class BackgroundIsolationStatus(str, enum.Enum):
+    """Whether Milestone 6 Tier 2 background isolation was attempted for a
+    DigitizedProduct's refinement, and its outcome -- independent of
+    `image_refinement_status`, which tracks the overall (always-runs-Tier-1)
+    pipeline outcome. Isolation is attempted for every presentation type
+    now (including bulk/loose), but loose/bulk products are materially
+    harder to segment safely than a single packaged item, so a rejected
+    attempt is recorded distinctly here rather than silently folded into a
+    plain success -- letting a human reviewer later see "isolation was
+    tried and rejected as unsafe" instead of it looking identical to
+    "isolation succeeded cleanly" or "isolation was never attempted"."""
+
+    NOT_ATTEMPTED = "not_attempted"
+    APPLIED = "applied"
+    # Attempted, but rejected by this module's own safety check (retained
+    # too little of the original product) or failed outright (an
+    # exception, or output Pillow couldn't decode) -- either way, the
+    # refined image falls back to Tier-1-only, never a fabricated result.
+    REJECTED = "rejected"
+
+
+class DuplicateStatus(str, enum.Enum):
+    """Milestone 6's duplicate-detection outcome for a DigitizedProduct,
+    scoped to comparisons within its own job (see
+    app.services.duplicate_detection_service). This only FLAGS a possible
+    relationship -- it never merges or deletes anything; that decision is
+    Milestone 7's."""
+
+    NOT_CHECKED = "not_checked"
+    NONE = "none"
+    POSSIBLE = "possible"
+    LIKELY = "likely"
+
+
 class OrderStatus(str, enum.Enum):
     PENDING = "pending"
     CONFIRMED = "confirmed"

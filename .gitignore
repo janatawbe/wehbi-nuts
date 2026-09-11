@@ -23,6 +23,13 @@ __pycache__/
 server/uploads/digitizer/*
 !server/uploads/digitizer/.gitkeep
 
+# --- M6 image-refinement style/presentation reference images: local
+# development/runtime guidance assets only, never application product
+# data. Not committed -- typically third-party photography with no
+# redistribution rights. See server/reference-images/README.md. ---
+server/reference-images/*
+!server/reference-images/README.md
+
 # --- Editor / OS ---
 .vscode/
 .idea/

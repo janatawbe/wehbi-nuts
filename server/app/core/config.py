@@ -25,6 +25,16 @@ class Settings(BaseSettings):
     openrouter_api_key: str | None = None
     openrouter_model: str = "google/gemini-2.5-flash-lite"
 
+    # AI image refinement (Milestone 6), via OpenRouter's Images API
+    # (POST /api/v1/images) -- a different endpoint/model on the SAME
+    # OpenRouter account and OPENROUTER_API_KEY above, not a different
+    # provider or credential. See
+    # app/services/ai/image_editing_refiner.py for the full rationale.
+    # Gated the same way as get_ai_analyzer/get_ai_enricher: active only
+    # when openrouter_api_key is set; falls back to the free local
+    # refiner otherwise (see api/digitizer.get_product_image_refiner).
+    openrouter_image_refinement_model: str = "google/gemini-2.5-flash-image"
+
 
 @lru_cache
 def get_settings() -> Settings:

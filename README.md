@@ -245,6 +245,30 @@ image's actual bounds, before cropping; a box that collapses to zero area
 after clamping/rounding is dropped rather than turned into a degenerate
 crop.
 
+**Bounding-box quality (added after manual testing surfaced boxes that
+mostly captured a neighboring item's lid, empty shelf, or straddled two
+adjacent jars):** the instructions now explicitly tell the model each box
+must tightly enclose exactly one complete unit, prioritize the product's
+body over its lid/cap, never straddle two adjacent items or include a
+neighboring product/shelf/background, never return a tiny sliver, and to
+**omit** an item entirely rather than guess a poor box when it's too
+occluded to localize reliably. This is a prompt-instruction change, not an
+architecture change — M4 still detects multiple physical units of the
+same product separately; only the box *quality* is targeted.
+
+This can only meaningfully improve model behavior, not fully guarantee it
+— a vision-language model's pixel-level localization on a cluttered shelf
+with closely-packed, similar-looking items is a known soft spot versus a
+dedicated object detector, and no prompt wording can eliminate that
+category of error. As defense in depth,
+`digitizer_processing_service._is_bbox_plausible` deterministically drops
+a detection with degenerate geometry (near-zero area relative to the
+source image, or an extreme aspect ratio) the same way an invalid bbox is
+already silently dropped — this is a narrow, generic safety net against
+pathological output, **not** a crop-quality filter: it cannot detect a
+normally-sized box that simply landed on the wrong object, since that
+requires scene understanding no geometry check can provide.
+
 ### Processing pipeline & rerun behavior
 
 `POST /api/digitizer/jobs/{job_id}/process`
@@ -349,6 +373,259 @@ synthetic validation photos used during development — see git history for
 how they were generated. `test-data/real-shop-images/` is a held-out,
 never-inspected-during-development real-photo validation set.
 
+## Milestone 6 — Image Refinement & Duplicate Detection
+
+Turns each Milestone 4 crop into a catalog-ready image, and flags likely
+duplicate candidates *within a single digitization job* (e.g. five
+identical packages photographed on one shelf) for a human to resolve
+later. Duplicate detection is entirely local, $0 cost. Image refinement
+has **two implementations** behind one interface — a free local one and
+an approved, paid AI one — see below.
+
+### Image refinement: `ProductImageRefiner`, two implementations, three preserved files
+
+Every `DigitizedProduct` keeps **three** distinct images on disk: the
+original source photo (Milestone 3), the M4 crop (Milestone 4), and — once
+refined — a separate `refined_image` (Milestone 6). Refinement never
+overwrites either of the first two, and a failed refinement attempt never
+touches a previous valid `refined_image` either (see "Failure handling"
+below).
+
+`app/services/image_refinement_service.py` defines the
+`ProductImageRefiner` interface (one `refine(request) -> RefinementResult`
+method, mirroring `AIProductAnalyzer` from Milestone 4) with two
+implementations, selected once per request by
+`api/digitizer.get_product_image_refiner`:
+
+- **`AIProductImageRefiner`** (`app/services/ai/image_editing_refiner.py`)
+  — the active refiner whenever `OPENROUTER_API_KEY` is configured. A
+  **paid** AI image-editing call (see "AI provider & cost" below).
+- **`LocalBackgroundRefiner`** — free, local, always available; used only
+  when no API key is configured at all. Wraps the original Tier 1
+  (Pillow) + Tier 2 (`rembg`) pipeline described below. This is a
+  *configuration* fallback (what runs when AI isn't set up), never a
+  *runtime* one — once AI is configured, a failed AI call is recorded as
+  a failed refinement, **never** silently swapped for a `rembg` result
+  and presented as if it had succeeded.
+
+### AI provider & cost — `google/gemini-2.5-flash-image` ("Nano Banana")
+
+Manual visual testing of the `rembg`-only pipeline showed it wasn't good
+enough for the storefront — a tray of mixed nuts became an awkward
+rectangular cutout on white rather than a natural standalone pile.
+Achieving the target presentation (loose nuts as a natural clean pile,
+matching premium nut-store catalog photography) needs actual generative
+image editing, not just background masking.
+
+The existing M4/M5 model (`google/gemini-2.5-flash-lite`) was checked
+live against OpenRouter's model catalog and confirmed to have **no image
+output capability at all** (`output_modalities: ["text"]`) — it cannot do
+this. After live investigation of OpenRouter's dedicated Images API
+(`POST /api/v1/images`, distinct from the Chat Completions endpoint
+M4/M5 use), **`google/gemini-2.5-flash-image`** was selected and
+approved:
+
+- Confirmed (live, via OpenRouter's free model-metadata endpoints) to
+  support `input_references` (up to 3 images per request) for
+  image-to-image editing, `1:1` aspect ratio output, and is one of the
+  best-documented models for exactly this identity-preserving,
+  reference-guided editing task.
+- **Paid.** Estimated **~$0.03–$0.05 per refined image**, from
+  OpenRouter's published `image_output` rate ($0.00003/token) — not a
+  measured figure, since no real call was made until this was approved.
+- Uses the **same `OPENROUTER_API_KEY`** as Milestone 4/5 — a different
+  OpenRouter endpoint/model on the same account, not a new provider or
+  credential. Configured model name: `OPENROUTER_IMAGE_REFINEMENT_MODEL`
+  (default `google/gemini-2.5-flash-image`).
+- **Exactly one attempt per manual "Refine" click** — deliberately no
+  retry loop (unlike M4/M5's transient-error retries) and no fallback to
+  a different/cheaper paid model, since every attempt is billed
+  regardless of outcome.
+
+**Request structure**: at most 3 images total — the real M4 crop is
+always image 1 (`input_references[0]`), followed by up to 2 style
+reference images (see "Reference images" below). The prompt text (the
+Images API has no separate system/user roles, just one `prompt` string)
+explicitly labels image 1 as `SOURCE PRODUCT IMAGE -- THIS IS THE PRODUCT
+TO PRESERVE AND EDIT` and every following image as `STYLE/PRESENTATION
+REFERENCE ONLY -- DO NOT COPY THE PRODUCT`.
+
+**Output handling**: the response's `data[0].b64_json` is base64-decoded,
+validated as a genuine, decodable image (Pillow), and rejected — raising
+`AIImageRefinementError`, turned into `image_refinement_status=failed` —
+if missing, empty, malformed, or undecodable. A valid result is always
+re-composed through the *same* deterministic canvas step Tier 1 uses
+(exact 1200×1200, centered, padded) regardless of what size the model
+actually returned, so the final geometric contract never depends on the
+model obeying the "1200×1200" instruction exactly.
+
+**Usage/cost logging**: OpenRouter's `usage.cost`/`usage.total_tokens` are
+logged server-side only (`logger.info`, never in an API response) for
+every real call — the API key and `Authorization` header are never
+logged, and a failed-request exception is logged without its traceback
+(`exc_info=False`) since an `httpx` exception can carry the outgoing
+request/headers.
+
+### System prompt & per-product context
+
+The full image-refinement system prompt is stored once, centrally, in
+`app/services/ai/image_refinement_prompt.py` (`SYSTEM_PROMPT`) — never
+duplicated across routes/services. It defines the truthfulness/
+product-preservation rules (never invent a different product, never
+redesign real packaging, remove only the shop/tray/background context,
+pure white 1200×1200 output, no invented text/logos/props/prices, etc.)
+and is combined with a short **per-product instruction** built from
+Milestone 4/5 metadata (`build_product_context_text`): name, category,
+presentation, selling mode, brand, flavor/variant, plus a presentation-
+specific emphasis (bulk: "create a natural standalone pile... do not keep
+the rectangular tray shape"; packaged: "preserve the exact real package...
+do not redesign packaging"). **Price, barcode, and every internal ID are
+deliberately never included** — `RefinementProductContext` has no price
+field at all, so this is a structural guarantee, not a filter that could
+be forgotten.
+
+### Reference images
+
+`server/reference-images/product-refinement/` holds **local-only style/
+presentation reference photographs** (composition, lighting, whitespace,
+natural arrangement) — never application/product data, never committed to
+git (see `server/reference-images/README.md`; typically third-party
+photography with no redistribution rights). `app/services/reference_images.py`
+selects up to 2 references by filename **prefix**, matched to a product's
+`presentation` (`bulk-`/`seeds-` for `bulk_tray`/`bulk_loose`, `packaged-`
+for `packaged`/`jar`/`bottle`; `other`/unknown gets none) — extensible by
+just dropping a correctly-prefixed file in, no code change needed. The
+directory is optional; if absent (e.g. a fresh clone or CI), selection
+returns an empty list rather than erroring.
+
+### Failure handling
+
+If the AI request fails outright, or returns something that isn't a
+valid image, `digitizer_refinement_service.refine_digitized_product`:
+leaves the original crop and any previous `refined_image` (both the DB
+field and the file on disk) **completely untouched**, sets
+`image_refinement_status=failed`, and returns a client-safe `502` — never
+retried automatically, never corrupting product data. A human can retry
+explicitly via "Re-refine" at any time.
+
+### The local Tier 1 + Tier 2 (`rembg`) pipeline
+
+Still fully implemented, tested, and used whenever no `OPENROUTER_API_KEY`
+is configured (see `LocalBackgroundRefiner` above) — kept as a real,
+working fallback/helper, not deleted, but it is never presented as the
+successful *AI catalog refinement* when the AI provider is configured and
+available.
+
+**Tier 1 (always runs, pure Pillow)**: composes the crop onto a fixed
+**1200×1200** square canvas with consistent padding (~8% margin),
+centered, on a solid neutral (white) background; resizes with `LANCZOS`
+resampling (up when the crop is small, down when it's large, aspect ratio
+always preserved — never stretched); finishes with a conservative
+`UnsharpMask` pass. **Important terminology**: this is high-quality
+resizing/layout, **not** AI super-resolution — it never invents detail
+that wasn't already in the source crop.
+
+**Tier 2** (attempted for every "suitable" presentation — `packaged`,
+`jar`, `bottle`, `bulk_tray`, `bulk_loose`; `other`/unclassified always
+skip it): background isolation via [`rembg`](https://github.com/danielgatis/rembg)
+(MIT license) running the small `u2netp` ONNX model locally on CPU
+(~4.7MB, cached by `rembg` on first use). Every isolation attempt is
+validated before being trusted — `_is_isolation_usable` rejects a result
+retaining less than `MIN_RETAINED_AREA_RATIO` (15%) of the original
+crop's pixel area (a purely quantitative guard against an
+over-aggressive segmentation), falling back to Tier-1-only output and
+recording `background_isolation_status=rejected`. This local path is
+isolation only, never generative recreation — it can only keep or
+discard pixels that were already in the source crop, which is exactly
+why it can't achieve the "natural standalone pile" look the AI path can.
+
+### Refinement endpoints & state
+
+`POST /api/digitizer/products/{id}/refine` (single item, always retriable
+as "Re-refine") and `POST /api/digitizer/jobs/{id}/refine` (bulk — skips
+`image_refinement_status=refined` products so a repeat call never redoes
+work that already succeeded; a product with no crop to refine from is
+marked `skipped` rather than retried forever). `image_refinement_status`
+(`pending` / `refined` / `failed` / `skipped`) and `background_isolation_status`
+(`not_attempted` / `applied` / `rejected`) are separate fields, and both
+are separate again from Milestone 5's `enrichment_status` and
+Milestone 7's `review_status` — independent pipeline stages, independent
+outcomes.
+
+### Duplicate detection: deterministic, layered, within-job only
+
+`app/services/duplicate_detection_service.py` flags likely duplicates
+**within one digitization job** (catalog-wide matching across jobs is
+deferred to Milestone 7). Never uses an AI/OpenRouter call.
+
+**Eligibility — enrichment is a hard prerequisite, and this is now made
+explicit rather than silent.** A candidate can only be compared once
+Milestone 5 enrichment has set its `selling_mode` (M4 never does) — an
+un-enriched candidate is left at `duplicate_status = not_checked`, never
+silently downgraded to `none` (which would look identical to "compared,
+found nothing"). `detect-duplicates` never triggers enrichment itself and
+never spends an AI call on its own initiative — the user decides when to
+enrich. Every job read includes a `duplicate_summary`
+(`total_candidates`, `eligible_candidates`, `skipped_not_enriched`,
+`likely_count`, `possible_count`, `none_count`), computed fresh each time,
+so "nothing flagged because nothing was comparable yet" is always
+distinguishable from "compared and genuinely found nothing."
+
+Three layers, most to least trusted, applied only to eligible pairs:
+
+1. **Hard compatibility filters** — a pair failing any of these is never
+   scored, no matter how similar anything else looks: `selling_mode` must
+   match; for `unit` products, a known, differing `package_weight` (e.g.
+   250g vs 500g) disqualifies the pair; a known, differing
+   `flavor_variant` disqualifies the pair; a known, differing `barcode`
+   disqualifies the pair. Missing data (nulls) is treated as
+   *inconclusive*, never as proof of a match — two null flavors don't
+   count as "the same flavor."
+2. **Exact non-null barcode match** — the strongest possible signal;
+   short-circuits straight to a maximal score once the hard filters above
+   already passed.
+3. Otherwise, a score **normalized over only the metadata fields
+   applicable to that specific pair** (known on both sides), plus a
+   **capped** perceptual-hash (`imagehash`, phash) image-similarity
+   contribution that can only ever *nudge* an already-plausible metadata
+   match — image similarity alone can never reach the "possible"
+   threshold by itself. Normalizing over applicable evidence (rather than
+   always dividing by the full brand+name+category+flavor+weight total)
+   is a deliberate fix: previously, a pair with a legitimately null
+   brand/flavor/package_weight on both sides (a common, honest outcome —
+   e.g. a bulk item with no legible brand) could never mathematically
+   reach the "possible" threshold even with a perfect name+category
+   match, since the achievable ceiling (0.55) sat below it (0.60). Now
+   the ceiling scales with what's actually knowable for that pair, so
+   null fields no longer permanently penalize a real match.
+
+Scores map to `duplicate_status`: `not_checked` (not yet eligible) →
+`none` (compared, no qualifying match) → `possible` (score ≥ 0.60) →
+`likely` (score ≥ 0.90, or any barcode match). Every qualifying pair is
+stored as a directed pairwise row (`digitized_product_duplicate_matches`,
+both directions) with its own `score` and `reasons` (e.g.
+`["barcode_match"]` or `["brand_match", "name_similarity:0.88"]`), and
+transitively-linked candidates (e.g. five identical packages) share one
+`duplicate_group_id` via a union-find grouping pass.
+
+**Milestone 6 only FLAGS — it never merges or deletes anything.**
+`POST /api/digitizer/jobs/{id}/detect-duplicates` is safe to call
+repeatedly (always recomputes that job's results from scratch, never
+accumulates stale rows) and never mutates a `DigitizedProduct`'s core
+fields. **Milestone 7 owns the actual human decision** (merge vs. keep
+separate) — nothing here implements that.
+
+### Dependencies added
+
+`imagehash` (pure Python + Pillow/numpy/scipy, no model file — supporting
+evidence only) and `rembg` + `onnxruntime` (CPU build) for the optional
+Tier 2 isolation. No `torch`/`torchvision`/CLIP/embedding model was added
+anywhere. `rembg` itself pulls in `opencv-python-headless` as its own
+transitive dependency (internal array/image utilities) — this project's
+own code never imports `cv2` directly, and this is unrelated to the
+classical-CV *detection* approach (contour/MSER) removed before
+Milestone 4's merge.
+
 ## Project Structure
 
 ```
@@ -380,6 +657,10 @@ wehbi-nuts/
 │   │       ├── ai/                  # AIProductAnalyzer + OpenRouterVisionDigitizer
 │   │       ├── digitizer_service.py            # upload (Milestone 3)
 │   │       ├── digitizer_processing_service.py # AI processing (Milestone 4)
+│   │       ├── digitizer_enrichment_service.py # AI enrichment (Milestone 5)
+│   │       ├── image_refinement_service.py     # Tier 1/2 refinement (Milestone 6)
+│   │       ├── digitizer_refinement_service.py # refinement orchestration (Milestone 6)
+│   │       ├── duplicate_detection_service.py  # duplicate flagging (Milestone 6)
 │   │       └── storage.py
 │   ├── alembic/                    # Migration environment
 │   │   └── versions/                # Migration scripts

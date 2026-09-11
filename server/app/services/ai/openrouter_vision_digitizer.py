@@ -98,8 +98,25 @@ Nuts") is fine when a specific one isn't visually justified. Put any \
 actually visible/readable text in visible_text verbatim, else null.
 
 bbox is [ymin, xmin, ymax, xmax], integers 0-1000, normalized to the full \
-image (0,0 = top-left, 1000,1000 = bottom-right), enclosing the COMPLETE \
-physical unit -- never shrunk to just a label or visible content.
+image (0,0 = top-left, 1000,1000 = bottom-right). Each bbox must TIGHTLY \
+enclose exactly ONE complete sellable physical unit:
+- Include the item's full visible body -- never shrink the box to only a \
+label or visible content, and never shrink it to only a lid/cap while \
+leaving out the body below it. Prioritize the product's body over its \
+lid/cap when choosing box extent.
+- Never let a box straddle the boundary between two adjacent items, and \
+never let it include part of a NEIGHBORING product, shelf, divider, or \
+background. If you cannot draw a box that cleanly contains exactly one \
+item without any of these, do not return that item at all.
+- Never return a tiny sliver/fragment box, and never invent a box from \
+empty shelf/background alone.
+- If a physical item is too occluded, too far away, or otherwise too \
+unclear to localize reliably, OMIT it entirely rather than guessing an \
+approximate or low-quality box. A missed item is better than a wrong one.
+- For tightly packed neighboring units of the same product where each \
+one cannot individually be localized cleanly, prefer treating that \
+cluster the same way you would a bulk_tray/bulk_loose presentation \
+(one item for the group) rather than forcing separate imprecise boxes.
 
 Be concise. Return only the structured item list, no extra commentary. If \
 there is no sellable product, return an empty list.

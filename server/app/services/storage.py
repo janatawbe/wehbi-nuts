@@ -23,7 +23,18 @@ SUPPORTED_IMAGE_FORMATS = {"JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp"}
 # by construction rather than by escaping/blocklisting client input.
 _SAFE_FILENAME = re.compile(r"^[0-9a-f]{32}\.(jpg|png|webp)$")
 
-MediaKind = Literal["source", "products"]
+MediaKind = Literal["source", "products", "refined"]
+
+# Maps a MediaKind to the on-disk subpath it actually lives under, relative
+# to a job's directory. "refined" is nested under products/ so a full
+# reprocess (which wipes the whole products/ tree via cleanup_job_products)
+# naturally also clears any refined images derived from the crops it's
+# replacing -- no separate cleanup call is needed for that case.
+_KIND_SUBPATH: dict[str, str] = {
+    "source": "source",
+    "products": "products",
+    "refined": "products/refined",
+}
 
 
 class InvalidImageError(ValueError):
@@ -144,8 +155,48 @@ def save_crop(products_dir: Path, jpeg_bytes: bytes) -> str:
 
 def cleanup_job_products(upload_root: Path, job_id: uuid.UUID) -> None:
     """Remove all previously-generated crops for a job (e.g. before a
-    rerun), without touching its source images."""
+    rerun), without touching its source images. Also removes any Milestone
+    6 refined images, since they are nested under products/ and derived
+    from the crops this call is about to invalidate."""
     shutil.rmtree(upload_root / str(job_id) / "products", ignore_errors=True)
+
+
+def get_job_refined_dir(upload_root: Path, job_id: uuid.UUID) -> Path:
+    """The directory holding a job's Milestone 6 refined catalog images,
+    creating it on first use. Nested under products/ (see MediaKind's
+    _KIND_SUBPATH) -- never touches source/ or the crops in products/
+    itself."""
+    refined_dir = upload_root / str(job_id) / "products" / "refined"
+    refined_dir.mkdir(parents=True, exist_ok=True)
+    return refined_dir
+
+
+def save_refined_image(refined_dir: Path, jpeg_bytes: bytes) -> str:
+    """Persist an already-encoded JPEG refined image under a freshly
+    generated safe filename, mirroring `save_crop`. Always a NEW filename
+    -- the crop this was derived from, and any previous refined image, are
+    never overwritten by this call; a caller replacing a prior refinement
+    is responsible for removing the old file separately (see
+    delete_refined_image)."""
+    filename = f"{uuid.uuid4().hex}.jpg"
+    file_path = refined_dir / filename
+    if file_path.resolve().parent != refined_dir.resolve():
+        raise InvalidImageError("Invalid refined image target.")  # unreachable in practice
+    file_path.write_bytes(jpeg_bytes)
+    return filename
+
+
+def delete_refined_image(refined_dir: Path, filename: str) -> None:
+    """Best-effort removal of one previously-saved refined image (e.g. the
+    prior file when a product is re-refined) -- never raises, since the
+    database row is always the source of truth and a leftover orphaned
+    file is a cosmetic disk-space issue, not a correctness one."""
+    if not _SAFE_FILENAME.match(filename):
+        return
+    candidate = refined_dir / filename
+    if candidate.resolve().parent != refined_dir.resolve():
+        return
+    candidate.unlink(missing_ok=True)
 
 
 def resolve_media_path(
@@ -165,7 +216,11 @@ def resolve_media_path(
     if not _SAFE_FILENAME.match(filename):
         return None
 
-    directory = upload_root / str(job_id) / kind
+    subpath = _KIND_SUBPATH.get(kind)
+    if subpath is None:
+        return None
+
+    directory = upload_root / str(job_id) / subpath
     candidate = directory / filename
     if candidate.resolve().parent != directory.resolve():
         return None

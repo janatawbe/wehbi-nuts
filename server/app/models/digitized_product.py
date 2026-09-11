@@ -9,8 +9,11 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base
 from app.db.types import GUID
 from app.models.enums import (
+    BackgroundIsolationStatus,
+    DuplicateStatus,
     EnrichmentStatus,
     IdentificationBasis,
+    ImageRefinementStatus,
     PresentationType,
     ReviewStatus,
     SellingMode,
@@ -161,6 +164,53 @@ class DigitizedProduct(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     bbox_width: Mapped[int | None] = mapped_column(Integer, nullable=True)
     bbox_height: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
+    # Milestone 6: catalog-ready image derived from `crop_image` (Tier 1
+    # canvas/padding/resize, plus attempted Tier 2 background isolation for
+    # every "suitable" presentation, including bulk/loose) -- see
+    # app.services.image_refinement_service. `crop_image` above is never
+    # overwritten; this is always a separate file.
+    refined_image: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    image_refinement_status: Mapped[ImageRefinementStatus] = mapped_column(
+        SAEnum(
+            ImageRefinementStatus,
+            name="image_refinement_status",
+            values_callable=lambda enum_cls: [member.value for member in enum_cls],
+        ),
+        nullable=False,
+        default=ImageRefinementStatus.PENDING,
+    )
+    # Whether Tier 2 background isolation was attempted and its outcome --
+    # distinct from image_refinement_status (the overall pipeline, which
+    # still succeeds via Tier-1-only fallback even when isolation itself
+    # is rejected). Lets a human reviewer see when isolation was tried and
+    # rejected as unsafe, e.g. for a hard-to-segment bulk/loose product.
+    background_isolation_status: Mapped[BackgroundIsolationStatus] = mapped_column(
+        SAEnum(
+            BackgroundIsolationStatus,
+            name="background_isolation_status",
+            values_callable=lambda enum_cls: [member.value for member in enum_cls],
+        ),
+        nullable=False,
+        default=BackgroundIsolationStatus.NOT_ATTEMPTED,
+    )
+
+    # Milestone 6: deterministic, within-job duplicate flagging -- see
+    # app.services.duplicate_detection_service. Never auto-merges/deletes;
+    # a human resolves flagged groups in Milestone 7.
+    duplicate_status: Mapped[DuplicateStatus] = mapped_column(
+        SAEnum(
+            DuplicateStatus,
+            name="duplicate_status",
+            values_callable=lambda enum_cls: [member.value for member in enum_cls],
+        ),
+        nullable=False,
+        default=DuplicateStatus.NOT_CHECKED,
+    )
+    # Shared by every product transitively matched together (union-find
+    # over qualifying pairwise matches) -- NULL until at least one match is
+    # found. Not a foreign key: it is a synthetic group label, not a row.
+    duplicate_group_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), nullable=True, index=True)
+
     job: Mapped["DigitizationJob"] = relationship(  # noqa: F821
         "DigitizationJob", back_populates="digitized_products"
     )
@@ -168,3 +218,10 @@ class DigitizedProduct(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         "Product", back_populates="digitized_products"
     )
     category: Mapped["Category | None"] = relationship("Category")  # noqa: F821
+    duplicate_matches: Mapped[list["DigitizedProductDuplicateMatch"]] = relationship(  # noqa: F821
+        "DigitizedProductDuplicateMatch",
+        foreign_keys="DigitizedProductDuplicateMatch.product_id",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="desc(DigitizedProductDuplicateMatch.score)",
+    )

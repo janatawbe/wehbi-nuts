@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
   DigitizerApiError,
+  detectDigitizerJobDuplicates,
   enrichDigitizedProduct,
   getDigitizerJob,
   listDigitizerJobs,
   processDigitizerJob,
+  refineDigitizedProduct,
   uploadDigitizerJob,
 } from '../api/digitizer'
 import { FileDropzone } from '../components/digitizer/FileDropzone'
@@ -68,6 +70,10 @@ export function DigitizerPage() {
   const [processError, setProcessError] = useState<string | null>(null)
   const [enrichingProductId, setEnrichingProductId] = useState<string | null>(null)
   const [enrichErrors, setEnrichErrors] = useState<Record<string, string>>({})
+  const [refiningProductId, setRefiningProductId] = useState<string | null>(null)
+  const [refineErrors, setRefineErrors] = useState<Record<string, string>>({})
+  const [detectingDuplicates, setDetectingDuplicates] = useState(false)
+  const [duplicatesError, setDuplicatesError] = useState<string | null>(null)
 
   const refreshJobs = useCallback(async () => {
     setJobsLoading(true)
@@ -150,6 +156,54 @@ export function DigitizerPage() {
       }))
     } finally {
       setEnrichingProductId(null)
+    }
+  }
+
+  const handleRefineProduct = async (productId: string) => {
+    if (refiningProductId) return
+
+    setRefiningProductId(productId)
+    setRefineErrors((prev) => {
+      const next = { ...prev }
+      delete next[productId]
+      return next
+    })
+    try {
+      const refined = await refineDigitizedProduct(productId)
+      setSelectedJob((prev) =>
+        prev
+          ? {
+              ...prev,
+              candidates: prev.candidates.map((candidate) =>
+                candidate.id === productId ? refined : candidate,
+              ),
+            }
+          : prev,
+      )
+    } catch (err) {
+      setRefineErrors((prev) => ({
+        ...prev,
+        [productId]: err instanceof DigitizerApiError ? err.message : 'Refinement failed. Please try again.',
+      }))
+    } finally {
+      setRefiningProductId(null)
+    }
+  }
+
+  const handleDetectDuplicates = async () => {
+    if (!selectedJobId || detectingDuplicates) return
+
+    setDetectingDuplicates(true)
+    setDuplicatesError(null)
+    try {
+      const job = await detectDigitizerJobDuplicates(selectedJobId)
+      setSelectedJob(job)
+    } catch (err) {
+      setDuplicatesError(
+        err instanceof DigitizerApiError ? err.message : 'Duplicate detection failed. Please try again.',
+      )
+    } finally {
+      setDetectingDuplicates(false)
     }
   }
 
@@ -268,6 +322,12 @@ export function DigitizerPage() {
               enrichingProductId={enrichingProductId}
               enrichErrors={enrichErrors}
               onEnrichProduct={handleEnrichProduct}
+              refiningProductId={refiningProductId}
+              refineErrors={refineErrors}
+              onRefineProduct={handleRefineProduct}
+              detectingDuplicates={detectingDuplicates}
+              duplicatesError={duplicatesError}
+              onDetectDuplicates={handleDetectDuplicates}
             />
           </section>
         </div>
