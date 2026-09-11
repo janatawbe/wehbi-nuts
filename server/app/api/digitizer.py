@@ -1,4 +1,5 @@
 import uuid
+from functools import lru_cache
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
@@ -10,17 +11,21 @@ from app.core.config import Settings, get_settings
 from app.db.session import get_db
 from app.models.digitization_job import DigitizationJob
 from app.models.digitized_product import DigitizedProduct
-from app.models.enums import EnrichmentStatus, ReviewStatus
+from app.models.enums import EnrichmentStatus, ImageRefinementStatus, ReviewStatus
 from app.schemas.digitization_job import DigitizationJobRead
 from app.schemas.digitized_product import DigitizedProductRead
-from app.schemas.digitizer import DigitizerJobRead
+from app.schemas.digitizer import DigitizerJobRead, DuplicateDetectionSummaryRead
 from app.services.ai.enrichment_service import OpenRouterProductEnricher
 from app.services.ai.errors import AIAnalysisError
+from app.services.ai.image_editing_refiner import AIProductImageRefiner
 from app.services.ai.openrouter_vision_digitizer import OpenRouterVisionDigitizer
 from app.services.ai.types import AIProductAnalyzer
 from app.services.digitizer_enrichment_service import EnrichmentError, enrich_digitized_product
 from app.services.digitizer_processing_service import ProcessingError, process_digitization_job
+from app.services.digitizer_refinement_service import RefinementError, refine_digitized_product
 from app.services.digitizer_service import DigitizerUploadError, create_digitization_job
+from app.services.duplicate_detection_service import detect_duplicates_for_job, summarize_duplicate_detection
+from app.services.image_refinement_service import LocalBackgroundRefiner, ProductImageRefiner, RembgBackgroundRemover
 from app.services.storage import MediaKind, get_upload_root, list_job_source_images, resolve_media_path
 
 router = APIRouter()
@@ -59,6 +64,41 @@ def get_ai_enricher(settings: Settings = Depends(get_settings)) -> OpenRouterPro
     )
 
 
+@lru_cache
+def _rembg_background_remover() -> RembgBackgroundRemover:
+    # Cached process-wide: loading the ONNX session is comparatively
+    # expensive and rembg's model itself is immutable, so there is no
+    # reason to reconstruct it per-request.
+    return RembgBackgroundRemover(model_name="u2netp")
+
+
+def get_product_image_refiner(settings: Settings = Depends(get_settings)) -> ProductImageRefiner:
+    """FastAPI dependency constructing the Milestone 6 image refiner.
+
+    Uses the approved AI image-editing model (google/gemini-2.5-flash-image
+    via OpenRouter's Images API, see app/services/ai/image_editing_refiner.py)
+    whenever `openrouter_api_key` is configured -- the SAME key already
+    used for Milestone 4/5's text analysis; this is a different
+    endpoint/model on the same OpenRouter account, not a different
+    provider or credential. Falls back to the free, local Tier1+rembg
+    refiner only when no key is configured at all (e.g. local dev without
+    one) -- a CONFIGURATION fallback, not a runtime one: once AI is
+    configured, a failed AI call is reported as a failed refinement, never
+    silently downgraded to this local result (see
+    digitizer_refinement_service and LocalBackgroundRefiner's docstring).
+
+    Tests override this dependency with a fake ProductImageRefiner the
+    same way get_ai_analyzer/get_ai_enricher are overridden, so the test
+    suite never makes a real network call to either OpenRouter surface.
+    """
+    if settings.openrouter_api_key:
+        return AIProductImageRefiner(
+            api_key=settings.openrouter_api_key,
+            model_name=settings.openrouter_image_refinement_model,
+        )
+    return LocalBackgroundRefiner(_rembg_background_remover())
+
+
 # Small helper shared by every route below: bolts the filesystem-derived
 # `source_images` and the persisted `digitized_products` onto the
 # DB-backed DigitizationJobRead schema.
@@ -72,7 +112,17 @@ def _to_job_read(db: Session, job: DigitizationJob, upload_root: Path) -> Digiti
         .where(DigitizedProduct.job_id == job.id)
         .order_by(DigitizedProduct.created_at.asc())
     )
-    data["candidates"] = list(db.scalars(stmt).all())
+    candidates = list(db.scalars(stmt).all())
+    data["candidates"] = candidates
+    summary = summarize_duplicate_detection(candidates)
+    data["duplicate_summary"] = DuplicateDetectionSummaryRead(
+        total_candidates=summary.total_candidates,
+        eligible_candidates=summary.eligible_candidates,
+        skipped_not_enriched=summary.skipped_not_enriched,
+        likely_count=summary.likely_count,
+        possible_count=summary.possible_count,
+        none_count=summary.none_count,
+    )
     return DigitizerJobRead(**data)
 
 
@@ -210,6 +260,92 @@ def enrich_job(
             enrich_digitized_product(db, upload_root, product_id, enricher)
         except (EnrichmentError, AIAnalysisError):
             continue
+
+    return _to_job_read(db, job, upload_root)
+
+
+@router.post("/products/{product_id}/refine", response_model=DigitizedProductRead)
+def refine_product(
+    product_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    upload_root: Path = Depends(get_upload_root),
+    refiner: ProductImageRefiner = Depends(get_product_image_refiner),
+) -> DigitizedProductRead:
+    """Refine exactly one DigitizedProduct's catalog image (Milestone 6)
+    via the AI image-editing model (when configured) or the local
+    Tier1+rembg refiner otherwise. Independent of job state and of every
+    other product in the job -- always retriable as an explicit
+    "Re-refine", regardless of `image_refinement_status`. At most one
+    paid AI attempt per call -- see digitizer_refinement_service.
+    """
+    try:
+        product = refine_digitized_product(db, upload_root, product_id, refiner)
+    except RefinementError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+
+    return DigitizedProductRead.model_validate(product)
+
+
+@router.post("/jobs/{job_id}/refine", response_model=DigitizerJobRead)
+def refine_job(
+    job_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    upload_root: Path = Depends(get_upload_root),
+    refiner: ProductImageRefiner = Depends(get_product_image_refiner),
+) -> DigitizerJobRead:
+    """Convenience endpoint: refine every not-yet-successfully-refined
+    product in a job. Skips `image_refinement_status == REFINED` so a
+    repeat call never redoes work that already succeeded (and, when AI is
+    configured, never re-bills for a product that's already refined); a
+    product whose refinement previously FAILED is retried (its status
+    isn't REFINED), and a product with no crop image to refine from is
+    marked SKIPPED so it isn't retried on every future bulk call either.
+    """
+    job = db.get(DigitizationJob, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Digitization job not found.")
+
+    stmt = select(DigitizedProduct.id).where(
+        DigitizedProduct.job_id == job_id,
+        DigitizedProduct.image_refinement_status != ImageRefinementStatus.REFINED,
+    )
+    product_ids = list(db.scalars(stmt).all())
+    for product_id in product_ids:
+        try:
+            refine_digitized_product(db, upload_root, product_id, refiner)
+        except RefinementError as exc:
+            if exc.status_code == 400:
+                # Nothing to refine from (no crop image) -- not a
+                # processing failure, and retrying later can't change
+                # that, so mark it distinctly rather than retrying forever.
+                product = db.get(DigitizedProduct, product_id)
+                if product is not None:
+                    product.image_refinement_status = ImageRefinementStatus.SKIPPED
+                    db.add(product)
+                    db.commit()
+            continue
+
+    return _to_job_read(db, job, upload_root)
+
+
+@router.post("/jobs/{job_id}/detect-duplicates", response_model=DigitizerJobRead)
+def detect_duplicates(
+    job_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    upload_root: Path = Depends(get_upload_root),
+) -> DigitizerJobRead:
+    """Recompute Milestone 6 duplicate flags for every candidate in this
+    job (scoped to this job only -- see duplicate_detection_service).
+    Fully local/deterministic, no AI call and no external dependency to
+    mock in tests. Safe to call repeatedly: always recomputes from
+    scratch, never accumulates stale pairwise rows, and never deletes or
+    merges a DigitizedProduct -- it only flags.
+    """
+    job = db.get(DigitizationJob, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Digitization job not found.")
+
+    detect_duplicates_for_job(db, upload_root, job_id)
 
     return _to_job_read(db, job, upload_root)
 

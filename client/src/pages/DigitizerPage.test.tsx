@@ -13,6 +13,8 @@ vi.mock('../api/digitizer', async (importOriginal) => {
     getDigitizerJob: vi.fn(),
     processDigitizerJob: vi.fn(),
     enrichDigitizedProduct: vi.fn(),
+    refineDigitizedProduct: vi.fn(),
+    detectDigitizerJobDuplicates: vi.fn(),
   }
 })
 
@@ -39,6 +41,12 @@ const BASE_CANDIDATE: DigitizedProduct = {
   barcode: null,
   field_review: null,
   enrichment_status: 'pending',
+  refined_image: null,
+  image_refinement_status: 'pending',
+  background_isolation_status: 'not_attempted',
+  duplicate_status: 'not_checked',
+  duplicate_group_id: null,
+  duplicate_matches: [],
 }
 
 const PENDING_JOB: DigitizerJob = {
@@ -52,6 +60,7 @@ const PENDING_JOB: DigitizerJob = {
   updated_at: new Date().toISOString(),
   source_images: ['abc123.jpg'],
   candidates: [],
+  duplicate_summary: null,
 }
 
 function makeFile(name: string, type: string, sizeBytes = 1024): File {
@@ -144,6 +153,7 @@ describe('DigitizerPage', () => {
       updated_at: new Date().toISOString(),
       source_images: ['abc123.jpg'],
       candidates: [],
+      duplicate_summary: null,
     })
 
     render(<DigitizerPage />)
@@ -190,6 +200,7 @@ describe('DigitizerPage', () => {
       updated_at: new Date().toISOString(),
       source_images: [],
       candidates: [],
+      duplicate_summary: null,
     })
   })
 
@@ -225,6 +236,7 @@ describe('DigitizerPage', () => {
         updated_at: new Date().toISOString(),
         source_images: [],
         candidates: [],
+        duplicate_summary: null,
       },
     ])
 
@@ -516,5 +528,208 @@ describe('DigitizerPage', () => {
 
     expect(await within(card).findByText(/By weight/)).toBeInTheDocument()
     expect(within(card).getByText(/None \(not packaged, or not printed\)/)).toBeInTheDocument()
+  })
+
+  // --- Milestone 6: refining a single digitized product's image -------
+
+  it('shows a "Refine" button on a detected product before refinement', async () => {
+    const card = await renderWithCompletedJob()
+
+    expect(within(card).getByRole('button', { name: /^refine$/i })).toBeInTheDocument()
+  })
+
+  it('clicking "Refine" calls the refine endpoint and offers an original/refined comparison', async () => {
+    const refined: DigitizedProduct = {
+      ...BASE_CANDIDATE,
+      refined_image: 'refinedfile.jpg',
+      image_refinement_status: 'refined',
+    }
+    vi.mocked(digitizerApi.refineDigitizedProduct).mockResolvedValue(refined)
+    const card = await renderWithCompletedJob()
+
+    fireEvent.click(within(card).getByRole('button', { name: /^refine$/i }))
+
+    expect(digitizerApi.refineDigitizedProduct).toHaveBeenCalledWith('product-1')
+    expect(await within(card).findByRole('button', { name: /^re-refine$/i })).toBeInTheDocument()
+    expect(within(card).getByTestId('toggle-image-view')).toBeInTheDocument()
+  })
+
+  it('shows an error if refinement fails, without losing the refine button', async () => {
+    vi.mocked(digitizerApi.refineDigitizedProduct).mockRejectedValue(
+      new digitizerApi.DigitizerApiError("Could not refine this product's image.", 502),
+    )
+    const card = await renderWithCompletedJob()
+
+    fireEvent.click(within(card).getByRole('button', { name: /^refine$/i }))
+
+    expect(await within(card).findByTestId('refine-product-error')).toHaveTextContent(
+      "Could not refine this product's image.",
+    )
+    expect(within(card).getByRole('button', { name: /^refine$/i })).toBeInTheDocument()
+  })
+
+  // --- Milestone 6: job-level duplicate detection -----------------------
+
+  it('shows a "Detect Duplicates" button for a completed job with candidates', async () => {
+    await renderWithCompletedJob()
+
+    expect(screen.getByRole('button', { name: /detect duplicates/i })).toBeInTheDocument()
+  })
+
+  it('clicking "Detect Duplicates" calls the endpoint and displays a flagged duplicate', async () => {
+    const flagged: DigitizedProduct = {
+      ...BASE_CANDIDATE,
+      duplicate_status: 'possible',
+      duplicate_group_id: 'group-1',
+      duplicate_matches: [
+        {
+          matched_product_id: 'product-2',
+          matched_name_en: 'Almonds (other photo)',
+          score: '0.72',
+          reasons: ['brand_match', 'name_similarity:0.90'],
+        },
+      ],
+    }
+    const completedJob: DigitizerJob = {
+      ...PENDING_JOB,
+      status: 'completed',
+      processed_items: 1,
+      candidates: [BASE_CANDIDATE],
+    }
+    vi.mocked(digitizerApi.listDigitizerJobs).mockResolvedValue([completedJob])
+    vi.mocked(digitizerApi.getDigitizerJob).mockResolvedValue(completedJob)
+    vi.mocked(digitizerApi.detectDigitizerJobDuplicates).mockResolvedValue({
+      ...completedJob,
+      candidates: [flagged],
+    })
+
+    render(<DigitizerPage />)
+    fireEvent.click(await screen.findByText('job-pend'))
+    await screen.findByTestId('job-details')
+
+    fireEvent.click(screen.getByRole('button', { name: /detect duplicates/i }))
+
+    expect(digitizerApi.detectDigitizerJobDuplicates).toHaveBeenCalledWith('job-pending-1')
+    const badge = await screen.findByTestId('duplicate-badge')
+    expect(badge).toHaveTextContent('Possible duplicate')
+    expect(badge).toHaveTextContent('72% match')
+    expect(badge).toHaveTextContent('Almonds (other photo)')
+  })
+
+  it('warns when candidates still need enrichment before duplicates can be compared', async () => {
+    const completedJob: DigitizerJob = {
+      ...PENDING_JOB,
+      status: 'completed',
+      processed_items: 1,
+      candidates: [BASE_CANDIDATE],
+      duplicate_summary: {
+        total_candidates: 3,
+        eligible_candidates: 1,
+        skipped_not_enriched: 2,
+        likely_count: 0,
+        possible_count: 0,
+        none_count: 0,
+      },
+    }
+    vi.mocked(digitizerApi.listDigitizerJobs).mockResolvedValue([completedJob])
+    vi.mocked(digitizerApi.getDigitizerJob).mockResolvedValue(completedJob)
+
+    render(<DigitizerPage />)
+    fireEvent.click(await screen.findByText('job-pend'))
+
+    const notice = await screen.findByTestId('duplicate-enrichment-notice')
+    expect(notice).toHaveTextContent('2 of 3 products')
+    expect(notice).toHaveTextContent("haven't been enriched yet")
+  })
+
+  it('shows a summary of compared/flagged products after duplicate detection', async () => {
+    const completedJob: DigitizerJob = {
+      ...PENDING_JOB,
+      status: 'completed',
+      processed_items: 1,
+      candidates: [BASE_CANDIDATE],
+      duplicate_summary: {
+        total_candidates: 2,
+        eligible_candidates: 2,
+        skipped_not_enriched: 0,
+        likely_count: 1,
+        possible_count: 1,
+        none_count: 0,
+      },
+    }
+    vi.mocked(digitizerApi.listDigitizerJobs).mockResolvedValue([completedJob])
+    vi.mocked(digitizerApi.getDigitizerJob).mockResolvedValue(completedJob)
+
+    render(<DigitizerPage />)
+    fireEvent.click(await screen.findByText('job-pend'))
+
+    const summary = await screen.findByTestId('duplicate-summary')
+    expect(summary).toHaveTextContent('Compared 2 enriched products')
+    expect(summary).toHaveTextContent('1 likely')
+    expect(summary).toHaveTextContent('1 possible')
+  })
+
+  it('does not show the enrichment notice once every candidate is enriched', async () => {
+    const completedJob: DigitizerJob = {
+      ...PENDING_JOB,
+      status: 'completed',
+      processed_items: 1,
+      candidates: [BASE_CANDIDATE],
+      duplicate_summary: {
+        total_candidates: 2,
+        eligible_candidates: 2,
+        skipped_not_enriched: 0,
+        likely_count: 0,
+        possible_count: 0,
+        none_count: 2,
+      },
+    }
+    vi.mocked(digitizerApi.listDigitizerJobs).mockResolvedValue([completedJob])
+    vi.mocked(digitizerApi.getDigitizerJob).mockResolvedValue(completedJob)
+
+    render(<DigitizerPage />)
+    fireEvent.click(await screen.findByText('job-pend'))
+    await screen.findByTestId('job-details')
+
+    expect(screen.queryByTestId('duplicate-enrichment-notice')).not.toBeInTheDocument()
+  })
+
+  it('shows an error if duplicate detection fails', async () => {
+    const completedJob: DigitizerJob = {
+      ...PENDING_JOB,
+      status: 'completed',
+      processed_items: 1,
+      candidates: [BASE_CANDIDATE],
+    }
+    vi.mocked(digitizerApi.listDigitizerJobs).mockResolvedValue([completedJob])
+    vi.mocked(digitizerApi.getDigitizerJob).mockResolvedValue(completedJob)
+    vi.mocked(digitizerApi.detectDigitizerJobDuplicates).mockRejectedValue(
+      new digitizerApi.DigitizerApiError('Digitization job not found.', 404),
+    )
+
+    render(<DigitizerPage />)
+    fireEvent.click(await screen.findByText('job-pend'))
+    await screen.findByTestId('job-details')
+
+    fireEvent.click(screen.getByRole('button', { name: /detect duplicates/i }))
+
+    expect(await screen.findByTestId('job-duplicates-error')).toHaveTextContent(
+      'Digitization job not found.',
+    )
+  })
+
+  it('does not show Merge/Keep Separate actions -- that decision belongs to Milestone 7', async () => {
+    const flagged: DigitizedProduct = {
+      ...BASE_CANDIDATE,
+      duplicate_status: 'likely',
+      duplicate_group_id: 'group-1',
+      duplicate_matches: [
+        { matched_product_id: 'product-2', matched_name_en: 'Almonds', score: '0.95', reasons: ['barcode_match'] },
+      ],
+    }
+    const card = await renderWithCompletedJob(flagged)
+
+    expect(within(card).queryByRole('button', { name: /merge/i })).not.toBeInTheDocument()
+    expect(within(card).queryByRole('button', { name: /keep separate/i })).not.toBeInTheDocument()
   })
 })

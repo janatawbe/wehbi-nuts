@@ -6,8 +6,11 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.enums import (
+    BackgroundIsolationStatus,
+    DuplicateStatus,
     EnrichmentStatus,
     IdentificationBasis,
+    ImageRefinementStatus,
     PresentationType,
     ReviewStatus,
     SellingMode,
@@ -50,9 +53,30 @@ class DigitizedProductBase(BaseModel):
     # DigitizedProduct.field_review).
     field_review: dict[str, Any] | None = None
 
+    # Milestone 6 image refinement.
+    refined_image: str | None = Field(default=None, max_length=512)
+    image_refinement_status: ImageRefinementStatus = ImageRefinementStatus.PENDING
+    background_isolation_status: BackgroundIsolationStatus = BackgroundIsolationStatus.NOT_ATTEMPTED
+
+    # Milestone 6 duplicate detection -- flags only, never a merge/delete.
+    duplicate_status: DuplicateStatus = DuplicateStatus.NOT_CHECKED
+    duplicate_group_id: uuid.UUID | None = None
+
 
 class DigitizedProductCreate(DigitizedProductBase):
     pass
+
+
+class DuplicateMatchRead(BaseModel):
+    """One directed pairwise duplicate match, evidence-only -- see
+    DigitizedProductDuplicateMatch. Never implies anything was merged."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    matched_product_id: uuid.UUID
+    matched_name_en: str | None = None
+    score: Decimal
+    reasons: list[str]
 
 
 class DigitizedProductUpdate(BaseModel):
@@ -74,6 +98,11 @@ class DigitizedProductUpdate(BaseModel):
     field_review: dict[str, Any] | None = None
     review_status: ReviewStatus | None = None
     enrichment_status: EnrichmentStatus | None = None
+    refined_image: str | None = Field(default=None, max_length=512)
+    image_refinement_status: ImageRefinementStatus | None = None
+    background_isolation_status: BackgroundIsolationStatus | None = None
+    duplicate_status: DuplicateStatus | None = None
+    duplicate_group_id: uuid.UUID | None = None
 
 
 class DigitizedProductRead(DigitizedProductBase):
@@ -82,3 +111,4 @@ class DigitizedProductRead(DigitizedProductBase):
     id: uuid.UUID
     created_at: datetime
     updated_at: datetime
+    duplicate_matches: list[DuplicateMatchRead] = []

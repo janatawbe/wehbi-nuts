@@ -22,6 +22,37 @@ from app.services.storage import (
 
 _MIME_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}
 
+# Deterministic, generic sanity bounds on a detection's bbox GEOMETRY --
+# not tuned to any specific product, image, or shelf layout. This is a
+# narrow safety net against truly pathological/degenerate model output
+# (a near-zero-area sliver, an absurdly thin strip), not a crop-quality
+# filter: it cannot detect a well-formed, reasonably-sized box that simply
+# landed on the WRONG object (a neighboring item's lid, empty shelf next
+# to a product) -- that failure mode requires genuine scene understanding,
+# which only the model itself can provide (see INSTRUCTIONS in
+# openrouter_vision_digitizer.py for the actual fix aimed at that case).
+# Deliberately lenient in both directions so a real, legitimately small or
+# unusually-shaped product is never rejected.
+_MIN_BBOX_AREA_RATIO = 0.001  # 0.1% of the source image's area
+_MAX_BBOX_ASPECT_RATIO = 12.0  # width:height or height:width, whichever is larger
+
+
+def _is_bbox_plausible(box_px: tuple[int, int, int, int], image_width: int, image_height: int) -> bool:
+    """True unless `box_px` is geometrically degenerate -- see the module
+    comment above. `_bbox_to_pixels` already rejects a zero-area box; this
+    additionally rejects a technically-nonzero but implausibly tiny or
+    sliver-shaped one."""
+    _, _, width, height = box_px
+    image_area = image_width * image_height
+    if image_area <= 0 or width <= 0 or height <= 0:
+        return False
+    if (width * height) / image_area < _MIN_BBOX_AREA_RATIO:
+        return False
+    aspect_ratio = width / height
+    if aspect_ratio > _MAX_BBOX_ASPECT_RATIO or aspect_ratio < 1 / _MAX_BBOX_ASPECT_RATIO:
+        return False
+    return True
+
 
 class ProcessingError(Exception):
     """A client-safe error raised before/without mutating job state.
@@ -102,8 +133,9 @@ def _detect_products_for_image(
     *whole* image (the API call itself failing, or the response overall
     not parsing) -- callers treat that as this one source image failing,
     not the whole job. An individual detected item with an invalid/
-    degenerate bbox, or a crop that fails to encode, is silently skipped
-    rather than failing the entire image (see README).
+    degenerate bbox, an implausible bbox geometry (see
+    _is_bbox_plausible), or a crop that fails to encode, is silently
+    skipped rather than failing the entire image (see README).
     """
     mime_type = _MIME_TYPES.get(image_path.suffix.lower())
     if mime_type is None:
@@ -121,6 +153,8 @@ def _detect_products_for_image(
         for detection in detections:
             box_px = _bbox_to_pixels(detection.bbox, width, height)
             if box_px is None:
+                continue
+            if not _is_bbox_plausible(box_px, width, height):
                 continue
             crop_bytes = _encode_crop(image, box_px)
             if crop_bytes is None:

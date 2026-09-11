@@ -13,3 +13,25 @@ python-multipart==0.0.32
 # as an OpenAI-compatible HTTP client pointed at OpenRouter's gateway
 # (base_url override) -- no direct OpenAI API usage/billing.
 openai==3.11.0
+
+# Image refinement + duplicate detection (Milestone 6). Entirely local/free
+# -- no external API, no billed usage, $0 cost.
+#
+# imagehash: lightweight perceptual hashing (phash) used only as capped,
+# SUPPORTING evidence in duplicate detection -- never sufficient on its own
+# to flag a duplicate. Pure Python + Pillow + numpy/scipy, no model file.
+imagehash==4.3.2
+#
+# rembg + onnxruntime: local, CPU-only background isolation (Tier 2
+# refinement), used ONLY for packaged/jar/bottle presentations, never for
+# bulk/loose products. Runs the small "u2netp" ONNX model (~4.7MB,
+# downloaded and cached locally by rembg itself on first use -- not
+# fetched at install time). Deliberately NOT a torch-based model -- no
+# torch/torchvision/CLIP/embedding dependency is introduced anywhere in
+# this project. Note: rembg pulls in `opencv-python-headless` as its own
+# transitive dependency (array/image-processing utilities only) -- this
+# project's own code never imports `cv2` directly, and this is unrelated
+# to the classical-CV *detection* approach (contour/MSER) removed before
+# Milestone 4's merge.
+onnxruntime==1.23.2
+rembg==2.0.69

@@ -11,7 +11,7 @@ from app.main import app
 from app.models.digitized_product import DigitizedProduct
 from app.services.ai.errors import AIInvalidResponseError, AIServiceUnavailableError
 from app.services.ai.types import DetectedProduct
-from app.services.digitizer_processing_service import _bbox_to_pixels, _encode_crop
+from app.services.digitizer_processing_service import _bbox_to_pixels, _encode_crop, _is_bbox_plausible
 
 SAFE_FILENAME = re.compile(r"^[0-9a-f]{32}\.jpg$")
 
@@ -98,6 +98,39 @@ def test_bbox_conversion_rejects_degenerate_box():
     assert _bbox_to_pixels([500, 500, 501, 501], 10, 10) is None
 
 
+def test_bbox_plausibility_accepts_a_normal_product_sized_box():
+    # Roughly matches a real, well-formed detection: a few percent of the
+    # image area, a plausible product aspect ratio.
+    assert _is_bbox_plausible((100, 100, 100, 168), 939, 714) is True
+
+
+def test_bbox_plausibility_rejects_a_near_zero_area_sliver():
+    # A pathological fragment (e.g. a stray shelf-edge artifact) -- far
+    # below any plausible product's share of a normally-framed photo.
+    assert _is_bbox_plausible((0, 0, 5, 5), 939, 714) is False
+
+
+def test_bbox_plausibility_rejects_an_extreme_aspect_ratio():
+    # A 2px-wide sliver spanning most of the frame's height -- no real
+    # sellable unit looks like this, regardless of its area.
+    assert _is_bbox_plausible((0, 0, 2, 700), 939, 714) is False
+    assert _is_bbox_plausible((0, 0, 700, 2), 939, 714) is False
+
+
+def test_bbox_plausibility_is_lenient_for_genuinely_small_or_elongated_products():
+    # Deliberately conservative bounds: a real but small or unusually
+    # elongated product (e.g. a thin bottle far from the camera) must
+    # never be rejected just for being small/thin -- only truly
+    # degenerate geometry is rejected.
+    assert _is_bbox_plausible((0, 0, 30, 200), 939, 714) is True  # thin tall bottle
+    assert _is_bbox_plausible((0, 0, 40, 40), 939, 714) is True  # small but square
+
+
+def test_bbox_plausibility_rejects_zero_size():
+    assert _is_bbox_plausible((0, 0, 0, 50), 939, 714) is False
+    assert _is_bbox_plausible((0, 0, 50, 0), 939, 714) is False
+
+
 def test_encode_crop_produces_decodable_jpeg_matching_bbox_size():
     image = Image.new("RGB", (400, 300), color=(10, 20, 30))
     crop_bytes = _encode_crop(image, (50, 50, 100, 80))
@@ -165,6 +198,30 @@ def test_process_job_with_multiple_products(client: TestClient):
     assert response.status_code == 200
     names = sorted(c["name_en"] for c in response.json()["candidates"])
     assert names == ["Almonds", "Coffee"]
+
+
+def test_implausible_sliver_detection_is_silently_dropped(client: TestClient):
+    """A degenerate-geometry detection (e.g. a stray shelf-edge fragment
+    the model hallucinated) must never become a DigitizedProduct -- it is
+    dropped the same way an invalid bbox already is, without failing the
+    image or the job. A legitimate detection in the same image is
+    unaffected."""
+    job = upload_job(client, make_image_bytes())  # 400x300 image
+    products = [
+        make_detected_product(name_en="Almonds", bbox=[0, 0, 400, 400]),
+        # Normalizes to a ~2x2px box on a 400x300 image -- a pathological
+        # sliver, not a real product.
+        make_detected_product(name_en="Shelf Fragment", bbox=[0, 0, 5, 5]),
+    ]
+    use_fake_analyzer([products])
+
+    response = client.post(f"/api/digitizer/jobs/{job['id']}/process")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "completed"
+    names = [c["name_en"] for c in body["candidates"]]
+    assert names == ["Almonds"]  # the sliver never made it into the results
 
 
 def test_bulk_tray_scene_is_one_candidate(client: TestClient):
