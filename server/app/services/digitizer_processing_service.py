@@ -171,7 +171,7 @@ def process_digitization_job(
             pending.extend(_detect_products_for_image(source_dir / source_filename, analyzer))
         except AIAnalysisError as exc:
             # AIAnalysisError messages are constructed to be client-safe
-            # (see app/services/ai/errors.py) -- e.g. "OpenAI's rate limit
+            # (see app/services/ai/errors.py) -- e.g. "OpenRouter's rate limit
             # was exceeded..." -- so surfacing the real reason
             # here, instead of only a generic "processing failed", is what
             # lets the frontend show something actionable.

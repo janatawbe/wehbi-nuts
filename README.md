@@ -144,32 +144,57 @@ provider/model is not baked into the rest of the app -- swapping
 providers means writing one new class behind that interface, not touching
 the processing pipeline, the API, or the database layer.
 
-### Provider and model: OpenAI, `gpt-4o-mini`
+### Provider and model: OpenRouter, `google/gemini-2.5-flash-lite`
 
-`OpenAIVisionDigitizer` (`app/services/ai/openai_vision_digitizer.py`)
-implements `AIProductAnalyzer` using the OpenAI Responses API
-(`client.responses.parse`). The model is configurable
-(`OPENAI_MODEL`, default `gpt-4o-mini`), chosen deliberately on cost
-grounds and verified live (via `client.models.list()`) rather than
-assumed:
+`OpenRouterVisionDigitizer` (`app/services/ai/openrouter_vision_digitizer.py`)
+implements `AIProductAnalyzer` via [OpenRouter](https://openrouter.ai), a
+gateway that proxies many providers' vision models behind one
+OpenAI-compatible Chat Completions API — reached with the `openai` Python
+package purely as a generic HTTP client (`base_url` pointed at
+OpenRouter), not for direct OpenAI billing or API usage. The whole point
+of the `AIProductAnalyzer` interface is that this specific choice of
+gateway/provider/model isn't load-bearing for the rest of the app; this is
+the *third* implementation behind that same interface for this project (an
+earlier iteration used direct Gemini, then direct OpenAI), and each swap
+touched only this one file plus wiring, never the processing pipeline,
+the API, or the database.
 
-- Confirmed to support image input and strict structured JSON output.
-- Priced at $0.15 / $0.60 per million input/output tokens -- cheaper on
-  both axes than every other candidate confirmed to reliably support
-  both vision and structured outputs at the time this was written (e.g.
-  a contemporary "cost-efficient tier" model was $0.20 / $1.20/M). A
-  nominally cheaper option existed, but its structured-output support
-  was inconsistently documented across sources, and this pipeline
-  depends entirely on structured output actually working -- not worth
-  the risk for a fractional-cent-per-image saving.
-- Not a "reasoning" model, so it never spends tokens on hidden reasoning
-  output before answering -- a real, material cost driver observed with
-  reasoning-style models -- keeping per-image cost small and
-  predictable.
+The model is configurable (`OPENROUTER_MODEL`, default
+`google/gemini-2.5-flash-lite`), chosen deliberately on cost grounds and
+verified live (via OpenRouter's free, unbilled `GET /api/v1/models`) rather
+than assumed:
+
+- Confirmed `structured_outputs` support (strict JSON schema, not just a
+  generic "please return JSON" instruction) and image input, directly
+  from that listing's `supported_parameters`/`input_modalities` fields.
+- An established Google model, already proven in this exact project's
+  earlier iterations to handle this task well: vision, structured output,
+  English/Arabic bilingual naming, and the "one tray vs. many pieces"
+  business judgment — not a tiny/obscure model chosen purely for having
+  the lowest price on a list. Several 3-4B-parameter open models and
+  OpenRouter's `:free` tier were cheaper on paper but judged unproven for
+  reliable bilingual identification and business-rule judgment at *any*
+  price, and free-tier models on OpenRouter carry materially stricter
+  rate limits — a real risk for a business pipeline (see the rate-limit
+  incident further down).
+- Priced at $0.10 / $0.40 per million input/output tokens at verification
+  time (plus a small flat per-image charge) — cheaper than the
+  direct-OpenAI model used in the previous iteration ($0.15/$0.60/M).
+- `reasoning.mandatory: false` in that same listing, meaning reasoning (a
+  real, billed cost driver on models that support it) can be fully
+  disabled rather than merely hidden from the response — see below.
+- Deliberately **not** `openrouter/auto`/`auto-beta` (OpenRouter's
+  automatic model routing): that could silently route a request to a
+  pricier model, which is exactly what pinning an exact model ID avoids.
 
 Cost is bounded further by keeping the system prompt concise, requesting
-no explanation/commentary text, and capping `max_output_tokens` (2000 --
-generous for a busy multi-item shelf, but not unbounded).
+no explanation/commentary text, capping `max_tokens` (2000 — generous for
+a busy multi-item shelf, but not unbounded), and passing OpenRouter's
+`reasoning: {"effort": "none"}` extension (via `extra_body`, since it is
+not a standard OpenAI field) to fully turn off reasoning-token generation
+— OpenRouter's docs are explicit that merely `exclude`-ing reasoning from
+the response still bills for computing it, while `effort: "none"`
+prevents the computation (and its cost) entirely.
 
 ### What the AI is asked to detect
 
@@ -198,18 +223,18 @@ model isn't sure, rather than a confident-sounding invented name.
 ### Structured output & bounding-box convention
 
 The model returns one JSON object per image: `{"items": [...]}`, requested
-via OpenAI's native structured-output mode (a Pydantic `text_format`
-passed straight to `client.responses.parse` — never parsed from free-form
-prose) and then re-validated independently with Pydantic on the server
-against `app.services.ai.types.DetectedProduct`: `name_en`, `name_ar`,
-`category`, `presentation`
+via the gateway's native structured-output mode (a Pydantic
+`response_format` passed straight to `client.beta.chat.completions.parse`
+— never parsed from free-form prose) and then re-validated independently
+with Pydantic on the server against `app.services.ai.types.DetectedProduct`:
+`name_en`, `name_ar`, `category`, `presentation`
 (`packaged`/`jar`/`bottle`/`bulk_tray`/`bulk_loose`/`other`), `bbox`,
 `confidence` (0-1), `visible_text`, `identification_basis`, `notes`. This
-double-checking matters in practice: OpenAI's strict JSON schema mode
-guarantees field *shape*, not this project's own cross-field business
-rules (e.g. bbox `ymin < ymax`), which are plain Python validators no
-schema can express — a schema-valid-but-business-invalid response is
-treated the same as a malformed one, not silently accepted.
+double-checking matters in practice: strict JSON schema mode guarantees
+field *shape*, not this project's own cross-field business rules (e.g.
+bbox `ymin < ymax`), which are plain Python validators no schema can
+express — a schema-valid-but-business-invalid response is treated the
+same as a malformed one, not silently accepted.
 
 `bbox` is `[ymin, xmin, ymax, xmax]`, each an integer normalized to
 **0-1000** relative to the full image regardless of its actual pixel size
@@ -282,33 +307,32 @@ are provider-specific — the same columns would be populated by any
 
 ### Error handling & retries
 
-`OpenAIVisionDigitizer` retries a rate-limit (`429`) or a transient
-server-side error (timeout, connection failure, `5xx`) up to 3 times with
-a short backoff; any other client error (bad request, invalid key,
-unknown model, a permission/billing rejection that isn't a plain rate
-limit) is never retried, since it will not resolve itself. Either way,
-only a client-safe `AIServiceUnavailableError`/`AIInvalidResponseError`
-message ever propagates — never a raw SDK exception or the API key. One
-source image's AI failure (unreachable service, malformed/invalid
-response, corrupt/unreadable image) is recorded as a failed image and
-does not stop the rest of the job from processing; the job's
-`error_message` includes that specific reason (for a known, client-safe
-`AIAnalysisError`) rather than only a generic "processing failed."
+OpenRouter's own [documented error codes](https://openrouter.ai/docs/api-reference/errors)
+separate transient failures from permanent ones more cleanly than a
+typical single-provider API does, and `OpenRouterVisionDigitizer` mirrors
+that separation directly rather than guessing from message text:
 
-A `429` specifically covers two different situations that need different
-handling: a short-lived rate limit (where a quick retry plausibly helps)
-versus an exhausted billing/quota balance (where no amount of retrying
-can help). Both are retried the same bounded number of times regardless
-— retrying cannot make a genuinely empty balance succeed sooner, so
-there's no reason to treat it differently on that axis — but the
-*message* after retries are exhausted names the real cause. This
-distinction was verified directly against a real account with zero
-credits during development: the error's `type` field read
-`"insufficient_quota"` but its `code` field read
-`"credit_balance_exhausted"`, not the `"insufficient_quota"` code shown in
-some documentation examples — so both fields are checked for a family of
-related terms rather than one exact expected string, since the precise
-value OpenAI sends is evidently not perfectly stable.
+- Retried, bounded to 3 attempts with a short backoff: `429` (rate
+  limited), `408` (request timeout), and `5xx` — including OpenRouter's
+  own `502` ("your chosen model is down") and `503` ("no available
+  provider meets your routing requirements"), both plausibly transient.
+- Never retried: `402` (insufficient credits — OpenRouter-specific;
+  retrying cannot fix an empty balance any faster) and every other client
+  error (`400`/`401`/`403`/`404`, bad request/invalid key/unknown model),
+  none of which resolve themselves.
+- A response that is schema-valid but fails this project's own business
+  rules (e.g. bbox `ymin < ymax`), a response cut off by the output-token
+  cap, or one blocked by content moderation are all treated as an invalid
+  response and not retried either — retrying the identical request is
+  unlikely to fix a content problem the way it can a transient one.
+
+Either way, only a client-safe `AIServiceUnavailableError`/
+`AIInvalidResponseError` message ever propagates — never a raw SDK
+exception or the API key. One source image's AI failure is recorded as a
+failed image and does not stop the rest of the job from processing; the
+job's `error_message` includes that specific reason (for a known,
+client-safe `AIAnalysisError`) rather than only a generic "processing
+failed."
 
 ### Data quality: drafts, not truth
 
@@ -353,7 +377,7 @@ wehbi-nuts/
 │   │   ├── models/                 # SQLAlchemy models + enums
 │   │   ├── schemas/                # Pydantic create/update/read schemas
 │   │   └── services/
-│   │       ├── ai/                  # AIProductAnalyzer + OpenAIVisionDigitizer
+│   │       ├── ai/                  # AIProductAnalyzer + OpenRouterVisionDigitizer
 │   │       ├── digitizer_service.py            # upload (Milestone 3)
 │   │       ├── digitizer_processing_service.py # AI processing (Milestone 4)
 │   │       └── storage.py

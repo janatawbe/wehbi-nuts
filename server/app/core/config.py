@@ -21,9 +21,9 @@ class Settings(BaseSettings):
     digitizer_max_image_dimension: int = 8000  # pixels, width or height
 
     # AI vision digitizer (Milestone 4). See
-    # app/services/ai/openai_vision_digitizer.py for the full rationale.
-    openai_api_key: str | None = None
-    openai_model: str = "gpt-4o-mini"
+    # app/services/ai/openrouter_vision_digitizer.py for the full rationale.
+    openrouter_api_key: str | None = None
+    openrouter_model: str = "google/gemini-2.5-flash-lite"
 
 
 @lru_cache

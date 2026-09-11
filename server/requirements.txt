@@ -9,5 +9,7 @@ psycopg[binary]==3.3.5
 pillow==12.3.0
 python-multipart==0.0.32
 
-# AI vision digitizer (Milestone 4).
+# AI vision digitizer (Milestone 4). The `openai` package is used purely
+# as an OpenAI-compatible HTTP client pointed at OpenRouter's gateway
+# (base_url override) -- no direct OpenAI API usage/billing.
 openai==3.11.0

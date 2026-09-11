@@ -47,7 +47,7 @@ class AIProductAnalyzer(Protocol):
 
     Keeping this interface narrow (image bytes in, validated detections
     out) is what lets the analyzer be swapped or supplemented later (e.g.
-    an OpenAI-based implementation) without touching the processing
+    a different provider or gateway) without touching the processing
     pipeline, the API, or the database layer.
     """
 
