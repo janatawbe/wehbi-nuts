@@ -1,7 +1,7 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import * as digitizerApi from '../api/digitizer'
-import type { DigitizerJob } from '../types/digitizer'
+import type { DigitizedProduct, DigitizerJob } from '../types/digitizer'
 import { DigitizerPage } from './DigitizerPage'
 
 vi.mock('../api/digitizer', async (importOriginal) => {
@@ -12,8 +12,34 @@ vi.mock('../api/digitizer', async (importOriginal) => {
     uploadDigitizerJob: vi.fn(),
     getDigitizerJob: vi.fn(),
     processDigitizerJob: vi.fn(),
+    enrichDigitizedProduct: vi.fn(),
   }
 })
+
+const BASE_CANDIDATE: DigitizedProduct = {
+  id: 'product-1',
+  job_id: 'job-pending-1',
+  source_image: 'abc123.jpg',
+  crop_image: 'cropfile.jpg',
+  name_en: 'Almonds',
+  name_ar: 'لوز',
+  category_suggestion: 'Nuts',
+  category_id: null,
+  presentation: 'packaged',
+  ai_confidence: '0.92',
+  identification_basis: 'visual_and_text',
+  visible_text: 'ALMONDS 500G',
+  notes: 'Slightly blurry label.',
+  brand: null,
+  flavor_variant: null,
+  description_en: null,
+  description_ar: null,
+  selling_mode: null,
+  package_weight: null,
+  barcode: null,
+  field_review: null,
+  enrichment_status: 'pending',
+}
 
 const PENDING_JOB: DigitizerJob = {
   id: 'job-pending-1',
@@ -280,21 +306,7 @@ describe('DigitizerPage', () => {
       ...PENDING_JOB,
       status: 'completed',
       processed_items: 1,
-      candidates: [
-        {
-          id: 'product-1',
-          source_image: 'abc123.jpg',
-          crop_image: 'cropfile.jpg',
-          name_en: 'Almonds',
-          name_ar: 'لوز',
-          category_suggestion: 'Nuts',
-          presentation: 'packaged',
-          ai_confidence: '0.92',
-          identification_basis: 'visual_and_text',
-          visible_text: 'ALMONDS 500G',
-          notes: 'Slightly blurry label.',
-        },
-      ],
+      candidates: [BASE_CANDIDATE],
     }
     vi.mocked(digitizerApi.listDigitizerJobs).mockResolvedValue([completedJob])
     vi.mocked(digitizerApi.getDigitizerJob).mockResolvedValue(completedJob)
@@ -347,5 +359,162 @@ describe('DigitizerPage', () => {
     expect(await screen.findByTestId('job-process-error')).toHaveTextContent(
       'The AI digitization service is not configured.',
     )
+  })
+
+  // --- Milestone 5: enriching a single digitized product --------------
+
+  async function renderWithCompletedJob(candidate: DigitizedProduct = BASE_CANDIDATE) {
+    const completedJob: DigitizerJob = {
+      ...PENDING_JOB,
+      status: 'completed',
+      processed_items: 1,
+      candidates: [candidate],
+    }
+    vi.mocked(digitizerApi.listDigitizerJobs).mockResolvedValue([completedJob])
+    vi.mocked(digitizerApi.getDigitizerJob).mockResolvedValue(completedJob)
+
+    render(<DigitizerPage />)
+    fireEvent.click(await screen.findByText('job-pend'))
+    return screen.findByTestId('digitized-product')
+  }
+
+  it('shows an "Enrich" button on a detected product before enrichment', async () => {
+    const card = await renderWithCompletedJob()
+
+    expect(within(card).getByRole('button', { name: /^enrich$/i })).toBeInTheDocument()
+  })
+
+  it('clicking "Enrich" calls the enrich endpoint and displays the enriched fields', async () => {
+    const enriched: DigitizedProduct = {
+      ...BASE_CANDIDATE,
+      brand: 'Wehbi Roastery',
+      flavor_variant: 'Salted',
+      selling_mode: 'unit',
+      package_weight: '0.500',
+      barcode: null,
+      description_en: 'Premium roasted almonds.',
+      description_ar: 'لوز محمص فاخر.',
+      enrichment_status: 'enriched',
+      field_review: {
+        brand: { needs_review: false, reason: null },
+        flavor_variant: { needs_review: false, reason: null },
+        selling_mode: { needs_review: false, reason: null },
+        package_weight: { needs_review: false, reason: null },
+        barcode: { needs_review: false, reason: null },
+        description_en: { needs_review: false, reason: null },
+        description_ar: { needs_review: false, reason: null },
+        category: { needs_review: false, reason: null },
+      },
+    }
+    vi.mocked(digitizerApi.enrichDigitizedProduct).mockResolvedValue(enriched)
+    const card = await renderWithCompletedJob()
+
+    fireEvent.click(within(card).getByRole('button', { name: /^enrich$/i }))
+
+    expect(digitizerApi.enrichDigitizedProduct).toHaveBeenCalledWith('product-1')
+    expect(await within(card).findByText(/Wehbi Roastery/)).toBeInTheDocument()
+    expect(within(card).getByText(/Premium roasted almonds\./)).toBeInTheDocument()
+    expect(within(card).getByRole('button', { name: /^re-enrich$/i })).toBeInTheDocument()
+  })
+
+  it('flags a field as needing review after enrichment', async () => {
+    const enriched: DigitizedProduct = {
+      ...BASE_CANDIDATE,
+      brand: null,
+      flavor_variant: null,
+      selling_mode: 'weight',
+      package_weight: null,
+      barcode: null,
+      description_en: 'Loose roasted cashews sold by weight.',
+      description_ar: 'كاجو محمص يباع بالوزن.',
+      enrichment_status: 'enriched',
+      field_review: {
+        brand: { needs_review: false, reason: null },
+        flavor_variant: { needs_review: false, reason: null },
+        selling_mode: { needs_review: true, reason: 'Could not tell if this is a tray or a bin.' },
+        package_weight: { needs_review: false, reason: null },
+        barcode: { needs_review: false, reason: null },
+        description_en: { needs_review: false, reason: null },
+        description_ar: { needs_review: false, reason: null },
+        category: { needs_review: false, reason: null },
+      },
+    }
+    vi.mocked(digitizerApi.enrichDigitizedProduct).mockResolvedValue(enriched)
+    const card = await renderWithCompletedJob()
+
+    fireEvent.click(within(card).getByRole('button', { name: /^enrich$/i }))
+
+    expect(await within(card).findByText('needs review')).toBeInTheDocument()
+  })
+
+  it('shows an error if enrichment fails, without losing the enrich button', async () => {
+    vi.mocked(digitizerApi.enrichDigitizedProduct).mockRejectedValue(
+      new digitizerApi.DigitizerApiError('OpenRouter was unavailable.', 502),
+    )
+    const card = await renderWithCompletedJob()
+
+    fireEvent.click(within(card).getByRole('button', { name: /^enrich$/i }))
+
+    expect(await within(card).findByTestId('enrich-product-error')).toHaveTextContent(
+      'OpenRouter was unavailable.',
+    )
+    expect(within(card).getByRole('button', { name: /^enrich$/i })).toBeInTheDocument()
+  })
+
+  it('shows a packaged item as "Per unit" with its package weight and flavor', async () => {
+    const enriched: DigitizedProduct = {
+      ...BASE_CANDIDATE,
+      brand: 'Wehbi Roastery',
+      flavor_variant: 'Salted',
+      selling_mode: 'unit',
+      package_weight: '0.500',
+      enrichment_status: 'enriched',
+      field_review: {
+        brand: { needs_review: false, reason: null },
+        flavor_variant: { needs_review: false, reason: null },
+        selling_mode: { needs_review: false, reason: null },
+        package_weight: { needs_review: false, reason: null },
+        barcode: { needs_review: false, reason: null },
+        description_en: { needs_review: false, reason: null },
+        description_ar: { needs_review: false, reason: null },
+        category: { needs_review: false, reason: null },
+      },
+    }
+    vi.mocked(digitizerApi.enrichDigitizedProduct).mockResolvedValue(enriched)
+    const card = await renderWithCompletedJob()
+
+    fireEvent.click(within(card).getByRole('button', { name: /^enrich$/i }))
+
+    expect(await within(card).findByText(/Per unit/)).toBeInTheDocument()
+    expect(within(card).getByText(/0\.500 kg/)).toBeInTheDocument()
+    expect(within(card).getByText(/Salted/)).toBeInTheDocument()
+  })
+
+  it('shows a bulk item as "By weight" with no package weight', async () => {
+    const enriched: DigitizedProduct = {
+      ...BASE_CANDIDATE,
+      brand: null,
+      flavor_variant: null,
+      selling_mode: 'weight',
+      package_weight: null,
+      enrichment_status: 'enriched',
+      field_review: {
+        brand: { needs_review: false, reason: null },
+        flavor_variant: { needs_review: false, reason: null },
+        selling_mode: { needs_review: false, reason: null },
+        package_weight: { needs_review: false, reason: null },
+        barcode: { needs_review: false, reason: null },
+        description_en: { needs_review: false, reason: null },
+        description_ar: { needs_review: false, reason: null },
+        category: { needs_review: false, reason: null },
+      },
+    }
+    vi.mocked(digitizerApi.enrichDigitizedProduct).mockResolvedValue(enriched)
+    const card = await renderWithCompletedJob()
+
+    fireEvent.click(within(card).getByRole('button', { name: /^enrich$/i }))
+
+    expect(await within(card).findByText(/By weight/)).toBeInTheDocument()
+    expect(within(card).getByText(/None \(not packaged, or not printed\)/)).toBeInTheDocument()
   })
 })

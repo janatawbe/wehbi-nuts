@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
   DigitizerApiError,
+  enrichDigitizedProduct,
   getDigitizerJob,
   listDigitizerJobs,
   processDigitizerJob,
@@ -65,6 +66,8 @@ export function DigitizerPage() {
   const [jobDetailsError, setJobDetailsError] = useState<string | null>(null)
   const [processing, setProcessing] = useState(false)
   const [processError, setProcessError] = useState<string | null>(null)
+  const [enrichingProductId, setEnrichingProductId] = useState<string | null>(null)
+  const [enrichErrors, setEnrichErrors] = useState<Record<string, string>>({})
 
   const refreshJobs = useCallback(async () => {
     setJobsLoading(true)
@@ -116,6 +119,37 @@ export function DigitizerPage() {
       )
     } finally {
       setProcessing(false)
+    }
+  }
+
+  const handleEnrichProduct = async (productId: string) => {
+    if (enrichingProductId) return
+
+    setEnrichingProductId(productId)
+    setEnrichErrors((prev) => {
+      const next = { ...prev }
+      delete next[productId]
+      return next
+    })
+    try {
+      const enriched = await enrichDigitizedProduct(productId)
+      setSelectedJob((prev) =>
+        prev
+          ? {
+              ...prev,
+              candidates: prev.candidates.map((candidate) =>
+                candidate.id === productId ? enriched : candidate,
+              ),
+            }
+          : prev,
+      )
+    } catch (err) {
+      setEnrichErrors((prev) => ({
+        ...prev,
+        [productId]: err instanceof DigitizerApiError ? err.message : 'Enrichment failed. Please try again.',
+      }))
+    } finally {
+      setEnrichingProductId(null)
     }
   }
 
@@ -231,6 +265,9 @@ export function DigitizerPage() {
               processing={processing}
               processError={processError}
               onProcess={handleProcess}
+              enrichingProductId={enrichingProductId}
+              enrichErrors={enrichErrors}
+              onEnrichProduct={handleEnrichProduct}
             />
           </section>
         </div>

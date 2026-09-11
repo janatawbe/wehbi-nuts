@@ -1,5 +1,5 @@
 import { API_BASE_URL } from '../config/api'
-import type { DigitizerJob } from '../types/digitizer'
+import type { DigitizedProduct, DigitizerJob } from '../types/digitizer'
 
 export class DigitizerApiError extends Error {
   status: number
@@ -76,6 +76,18 @@ export async function processDigitizerJob(jobId: string): Promise<DigitizerJob> 
   }
 
   return (await response.json()) as DigitizerJob
+}
+
+export async function enrichDigitizedProduct(productId: string): Promise<DigitizedProduct> {
+  const response = await fetch(`${API_BASE_URL}/api/digitizer/products/${productId}/enrich`, {
+    method: 'POST',
+  })
+
+  if (!response.ok) {
+    throw new DigitizerApiError(await parseErrorMessage(response), response.status)
+  }
+
+  return (await response.json()) as DigitizedProduct
 }
 
 /** Builds a displayable URL for a job's source or crop image via the

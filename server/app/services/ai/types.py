@@ -14,6 +14,12 @@ from pydantic import BaseModel, Field, field_validator
 PresentationValue = Literal["packaged", "jar", "bottle", "bulk_tray", "bulk_loose", "other"]
 IdentificationBasisValue = Literal["visual", "text", "visual_and_text"]
 
+# Milestone 5 enrichment: how a product is SOLD -- independent of any
+# printed package weight it happens to have (see DetectedProduct's sibling
+# `package_weight` field in the enrichment response). See
+# app.models.enums.SellingMode for the matching DB-backed enum.
+SellingModeValue = Literal["weight", "unit"]
+
 
 class DetectedProduct(BaseModel):
     """One sellable inventory unit detected in a source image by an

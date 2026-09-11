@@ -8,7 +8,13 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 from app.db.types import GUID
-from app.models.enums import IdentificationBasis, PresentationType, ReviewStatus
+from app.models.enums import (
+    EnrichmentStatus,
+    IdentificationBasis,
+    PresentationType,
+    ReviewStatus,
+    SellingMode,
+)
 from app.models.mixins import TimestampMixin, UUIDPrimaryKeyMixin
 
 
@@ -31,6 +37,10 @@ class DigitizedProduct(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         CheckConstraint(
             "bbox_height IS NULL OR bbox_height > 0",
             name="ck_digitized_products_bbox_height_positive",
+        ),
+        CheckConstraint(
+            "package_weight IS NULL OR package_weight >= 0",
+            name="ck_digitized_products_package_weight_non_negative",
         ),
     )
 
@@ -61,8 +71,29 @@ class DigitizedProduct(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     description_en: Mapped[str | None] = mapped_column(Text, nullable=True)
     description_ar: Mapped[str | None] = mapped_column(Text, nullable=True)
     brand: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    weight: Mapped[Decimal | None] = mapped_column(Numeric(10, 3), nullable=True)
-    unit: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # Flavor/type/variant (e.g. "Salted", "Hazelnut", "Dark Chocolate"),
+    # Milestone 5 enrichment -- null when not visible/identifiable, never
+    # invented.
+    flavor_variant: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # How this product is SOLD (Milestone 5 enrichment) -- see SellingMode's
+    # own docstring. Independent of `package_weight` below: a packaged
+    # 500g bag is UNIT with package_weight=0.500; a bulk tray is WEIGHT
+    # with package_weight=NULL.
+    selling_mode: Mapped[SellingMode | None] = mapped_column(
+        SAEnum(
+            SellingMode,
+            name="selling_mode",
+            values_callable=lambda enum_cls: [member.value for member in enum_cls],
+        ),
+        nullable=True,
+    )
+    # Kilograms. Only a genuinely printed/visible package net WEIGHT (never
+    # a volume, e.g. a bottle's "1L") -- populated regardless of
+    # selling_mode being knowable, but in practice only ever set for
+    # selling_mode == UNIT (a bulk/loose good has no package to print a
+    # weight on). See enrichment_service._EnrichmentResponse for the
+    # validator enforcing this.
+    package_weight: Mapped[Decimal | None] = mapped_column(Numeric(10, 3), nullable=True)
     barcode: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     ai_confidence: Mapped[Decimal | None] = mapped_column(Numeric(3, 2), nullable=True)
@@ -76,6 +107,18 @@ class DigitizedProduct(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         ),
         nullable=False,
         default=ReviewStatus.DRAFT,
+    )
+    # Whether Milestone 5 enrichment has completed for this row -- distinct
+    # from review_status above (human approval). Lets job-level enrichment
+    # skip already-enriched products without touching review state.
+    enrichment_status: Mapped[EnrichmentStatus] = mapped_column(
+        SAEnum(
+            EnrichmentStatus,
+            name="enrichment_status",
+            values_callable=lambda enum_cls: [member.value for member in enum_cls],
+        ),
+        nullable=False,
+        default=EnrichmentStatus.PENDING,
     )
 
     # AI vision-digitizer fields (Milestone 4). `category_suggestion` is
@@ -100,6 +143,15 @@ class DigitizedProduct(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     visible_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Field-level review flags from Milestone 5 enrichment, e.g.
+    # {"brand": {"needs_review": false, "reason": null}, ...} -- lets a
+    # future reviewer see exactly which enriched fields are uncertain
+    # instead of relying on the single overall `ai_confidence`/
+    # `needs_review` pair above. A field being null (no visible brand on a
+    # bulk item, no visible barcode) is a legitimate answer, not itself a
+    # reason for needs_review=true.
+    field_review: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
     # Pixel-space bounding box within `source_image`, derived from the AI's
     # normalized [0, 1000] coordinates -- kept in pixel space so displaying

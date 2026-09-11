@@ -2,7 +2,7 @@
 are ever made here -- the SDK client's `beta.chat.completions.parse` is
 replaced with a fake that returns pre-scripted responses, exercising only
 this project's own parsing, validation, and retry logic."""
-import httpx2
+import httpx
 import pytest
 from openai import APIConnectionError, APIStatusError, APITimeoutError
 
@@ -69,9 +69,9 @@ def _make_digitizer(outcomes: list, max_attempts: int = 3) -> OpenRouterVisionDi
 def _api_status_error(status_code: int, code: str | None = None, type_: str = "api_error"):
     """Build a real OpenAI SDK exception the way the SDK itself would,
     using a minimal fake httpx response."""
-    request = httpx2.Request("POST", "https://openrouter.ai/api/v1/chat/completions")
+    request = httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions")
     body = {"message": "err", "code": code, "type": type_}
-    response = httpx2.Response(status_code, request=request, json={"error": body})
+    response = httpx.Response(status_code, request=request, json={"error": body})
     return APIStatusError(message="err", response=response, body=body)
 
 
@@ -294,7 +294,7 @@ def test_permission_denied_403_is_not_retried():
 
 
 def test_timeout_exception_is_retried_then_succeeds():
-    timeout_error = APITimeoutError(request=httpx2.Request("POST", "https://openrouter.ai/api/v1/chat/completions"))
+    timeout_error = APITimeoutError(request=httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions"))
     digitizer = _make_digitizer([timeout_error, _FakeCompletion([ONE_ITEM])])
 
     results = digitizer.analyze_image(b"fake-bytes", "image/jpeg")
@@ -305,7 +305,7 @@ def test_timeout_exception_is_retried_then_succeeds():
 
 def test_connection_error_is_retried_then_succeeds():
     connection_error = APIConnectionError(
-        request=httpx2.Request("POST", "https://openrouter.ai/api/v1/chat/completions")
+        request=httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions")
     )
     digitizer = _make_digitizer([connection_error, _FakeCompletion([ONE_ITEM])])
 

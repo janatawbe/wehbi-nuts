@@ -10,11 +10,15 @@ from app.core.config import Settings, get_settings
 from app.db.session import get_db
 from app.models.digitization_job import DigitizationJob
 from app.models.digitized_product import DigitizedProduct
+from app.models.enums import EnrichmentStatus, ReviewStatus
 from app.schemas.digitization_job import DigitizationJobRead
+from app.schemas.digitized_product import DigitizedProductRead
 from app.schemas.digitizer import DigitizerJobRead
+from app.services.ai.enrichment_service import OpenRouterProductEnricher
 from app.services.ai.errors import AIAnalysisError
 from app.services.ai.openrouter_vision_digitizer import OpenRouterVisionDigitizer
 from app.services.ai.types import AIProductAnalyzer
+from app.services.digitizer_enrichment_service import EnrichmentError, enrich_digitized_product
 from app.services.digitizer_processing_service import ProcessingError, process_digitization_job
 from app.services.digitizer_service import DigitizerUploadError, create_digitization_job
 from app.services.storage import MediaKind, get_upload_root, list_job_source_images, resolve_media_path
@@ -39,6 +43,18 @@ def get_ai_analyzer(settings: Settings = Depends(get_settings)) -> AIProductAnal
             status_code=503, detail="The AI digitization service is not configured."
         )
     return OpenRouterVisionDigitizer(
+        api_key=settings.openrouter_api_key, model_name=settings.openrouter_model
+    )
+
+
+def get_ai_enricher(settings: Settings = Depends(get_settings)) -> OpenRouterProductEnricher:
+    """FastAPI dependency constructing the Milestone 5 enrichment client.
+    Mirrors get_ai_analyzer above; tests override this the same way."""
+    if not settings.openrouter_api_key:
+        raise HTTPException(
+            status_code=503, detail="The AI digitization service is not configured."
+        )
+    return OpenRouterProductEnricher(
         api_key=settings.openrouter_api_key, model_name=settings.openrouter_model
     )
 
@@ -132,6 +148,68 @@ def process_job(
         # caught inside process_digitization_job and recorded on the job
         # instead), but never leak a raw provider/SDK exception if one does.
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    return _to_job_read(db, job, upload_root)
+
+
+@router.post("/products/{product_id}/enrich", response_model=DigitizedProductRead)
+def enrich_product(
+    product_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    upload_root: Path = Depends(get_upload_root),
+    enricher: OpenRouterProductEnricher = Depends(get_ai_enricher),
+) -> DigitizedProductRead:
+    """Enrich exactly one DigitizedProduct with a single AI call (brand,
+    weight/unit, barcode, both descriptions, and a resolved category).
+    Independent of job state and of every other product in the job -- can
+    always be retried on its own without re-running detection.
+    """
+    try:
+        product = enrich_digitized_product(db, upload_root, product_id, enricher)
+    except EnrichmentError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+    except AIAnalysisError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    return DigitizedProductRead.model_validate(product)
+
+
+@router.post("/jobs/{job_id}/enrich", response_model=DigitizerJobRead)
+def enrich_job(
+    job_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    upload_root: Path = Depends(get_upload_root),
+    enricher: OpenRouterProductEnricher = Depends(get_ai_enricher),
+) -> DigitizerJobRead:
+    """Convenience endpoint: enrich every DRAFT, not-yet-enriched product in
+    a job. A thin loop over the single-item logic above (not separate
+    enrichment code), so per-item behavior -- including per-item retry --
+    stays identical whether triggered here or one product at a time. One
+    product's enrichment failing does not stop the rest.
+
+    Only targets `enrichment_status == PENDING`: calling this endpoint
+    again (e.g. after adding more source images or re-running detection)
+    must not re-bill an AI call for a product that already succeeded --
+    that would be paying for the same enrichment twice for no benefit. A
+    user who deliberately wants to redo one product's enrichment can still
+    do so explicitly via `POST /products/{id}/enrich`, which has no such
+    filter.
+    """
+    job = db.get(DigitizationJob, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Digitization job not found.")
+
+    stmt = select(DigitizedProduct.id).where(
+        DigitizedProduct.job_id == job_id,
+        DigitizedProduct.review_status == ReviewStatus.DRAFT,
+        DigitizedProduct.enrichment_status == EnrichmentStatus.PENDING,
+    )
+    product_ids = list(db.scalars(stmt).all())
+    for product_id in product_ids:
+        try:
+            enrich_digitized_product(db, upload_root, product_id, enricher)
+        except (EnrichmentError, AIAnalysisError):
+            continue
 
     return _to_job_read(db, job, upload_root)
 
