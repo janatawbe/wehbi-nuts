@@ -1,5 +1,12 @@
 import { API_BASE_URL } from '../config/api'
-import type { DigitizedProduct, DigitizerJob } from '../types/digitizer'
+import type {
+  BulkApproveResponse,
+  Category,
+  DigitizedProduct,
+  DigitizedProductReviewUpdate,
+  DigitizerJob,
+  DuplicateMergeResponse,
+} from '../types/digitizer'
 
 export class DigitizerApiError extends Error {
   status: number
@@ -81,6 +88,15 @@ export async function processDigitizerJob(jobId: string): Promise<DigitizerJob> 
   return postForJob(`/api/digitizer/jobs/${jobId}/process`)
 }
 
+/** Convenience wrapper for the existing job-level enrich endpoint
+ * (`POST /api/digitizer/jobs/{id}/enrich`, already implemented server-side
+ * since Milestone 5) -- added so the renovated UI can offer a single
+ * "Enrich Products" next-action button instead of forcing a first-time
+ * user to click "Enrich" on every card individually. No backend change. */
+export async function enrichDigitizerJob(jobId: string): Promise<DigitizerJob> {
+  return postForJob(`/api/digitizer/jobs/${jobId}/enrich`)
+}
+
 export async function enrichDigitizedProduct(productId: string): Promise<DigitizedProduct> {
   const response = await fetch(`${API_BASE_URL}/api/digitizer/products/${productId}/enrich`, {
     method: 'POST',
@@ -115,6 +131,99 @@ export async function refineDigitizerJob(jobId: string): Promise<DigitizerJob> {
 
 export async function detectDigitizerJobDuplicates(jobId: string): Promise<DigitizerJob> {
   return postForJob(`/api/digitizer/jobs/${jobId}/detect-duplicates`)
+}
+
+export async function listCategories(): Promise<Category[]> {
+  const response = await fetch(`${API_BASE_URL}/api/digitizer/categories`)
+
+  if (!response.ok) {
+    throw new DigitizerApiError(await parseErrorMessage(response), response.status)
+  }
+
+  return (await response.json()) as Category[]
+}
+
+// --- Milestone 7: human review & approval -----------------------------
+
+async function postJson<T>(path: string, body?: unknown): Promise<T> {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    method: 'POST',
+    headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  })
+
+  if (!response.ok) {
+    throw new DigitizerApiError(await parseErrorMessage(response), response.status)
+  }
+
+  return (await response.json()) as T
+}
+
+export async function listAllDigitizedProducts(): Promise<DigitizedProduct[]> {
+  const response = await fetch(`${API_BASE_URL}/api/digitizer/products`)
+
+  if (!response.ok) {
+    throw new DigitizerApiError(await parseErrorMessage(response), response.status)
+  }
+
+  return (await response.json()) as DigitizedProduct[]
+}
+
+export async function updateDigitizedProductReview(
+  productId: string,
+  payload: DigitizedProductReviewUpdate,
+): Promise<DigitizedProduct> {
+  const response = await fetch(`${API_BASE_URL}/api/digitizer/products/${productId}/review`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+
+  if (!response.ok) {
+    throw new DigitizerApiError(await parseErrorMessage(response), response.status)
+  }
+
+  return (await response.json()) as DigitizedProduct
+}
+
+export async function approveDigitizedProduct(productId: string): Promise<DigitizedProduct> {
+  return postJson<DigitizedProduct>(`/api/digitizer/products/${productId}/approve`)
+}
+
+export async function rejectDigitizedProduct(
+  productId: string,
+  reason?: string,
+): Promise<DigitizedProduct> {
+  return postJson<DigitizedProduct>(
+    `/api/digitizer/products/${productId}/reject`,
+    reason ? { reason } : undefined,
+  )
+}
+
+export async function keepDigitizedProductsSeparate(
+  productIds: string[],
+): Promise<DigitizedProduct[]> {
+  return postJson<DigitizedProduct[]>('/api/digitizer/products/duplicates/keep-separate', {
+    product_ids: productIds,
+  })
+}
+
+export async function mergeDigitizedProducts(
+  canonicalId: string,
+  mergeIds: string[],
+): Promise<DuplicateMergeResponse> {
+  return postJson<DuplicateMergeResponse>('/api/digitizer/products/duplicates/merge', {
+    canonical_id: canonicalId,
+    merge_ids: mergeIds,
+  })
+}
+
+export async function bulkApproveDigitizedProducts(
+  productIds: string[],
+): Promise<BulkApproveResponse> {
+  return postJson<BulkApproveResponse>('/api/digitizer/products/bulk-approve', {
+    product_ids: productIds,
+  })
 }
 
 /** Builds a displayable URL for a job's source, crop, or refined image via

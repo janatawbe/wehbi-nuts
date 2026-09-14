@@ -46,10 +46,11 @@ What it does include:
 ### Product vs. DigitizedProduct
 
 - **`DigitizedProduct`** is a *draft* produced by a future AI digitization
-  step: it holds whatever the AI extracted from a shop photo (name, price
-  guess, category suggestion, confidence score, raw AI output, etc.) along
-  with a `review_status` (`draft` / `approved` / `rejected` / `merged`).
-  It is never sold directly.
+  step: it holds whatever the AI extracted from a shop photo (name,
+  category suggestion, confidence score, raw AI output, etc. -- **never a
+  price**, see Milestone 7) along with a `review_status` (`pending_review`
+  / `draft` / `approved` / `rejected` / `merged` -- see Milestone 7 for the
+  full lifecycle). It is never sold directly.
 - **`Product`** is the actual, persisted catalog item that can be priced,
   stocked, and ordered. A `DigitizedProduct` only becomes linked to a real
   `Product` once a human approves it (`DigitizedProduct.product_id`) —
@@ -626,6 +627,259 @@ own code never imports `cv2` directly, and this is unrelated to the
 classical-CV *detection* approach (contour/MSER) removed before
 Milestone 4's merge.
 
+## Milestone 7 — Human Review & Approval
+
+Turns AI drafts into an actual catalog: a reviewer inspects each
+`DigitizedProduct`, edits it, resolves any duplicate flags, and approves it
+into a real `Product`. Every review/edit/approve/reject/merge/keep-separate
+action in this milestone costs **$0** — nothing here calls OpenRouter or
+any other AI service. This milestone intentionally does **not** include:
+
+- User/account auditing on review actions (who approved what) — that
+  belongs to Milestone 11, once real authentication exists.
+- Cart/checkout calculations for weight-based pricing (Milestone 9/10).
+- A general Category management UI (only a read-only picker is added here).
+- Automatically triggering enrichment/refinement/OpenRouter from the review
+  page — a reviewer can still trigger those *existing* Milestone 5/6 manual
+  actions, but nothing in Milestone 7 calls them on its own.
+
+### Review lifecycle (`ReviewStatus`)
+
+`PENDING_REVIEW` → (`DRAFT` ⇄ `PENDING_REVIEW`) → `APPROVED` | `REJECTED`,
+plus a separate terminal `MERGED` state. `PENDING_REVIEW` is where every
+candidate starts (Milestone 4 creates it; no human has looked at it yet) —
+**deliberately distinct from `DRAFT`**, which means a human explicitly
+opened the product and saved it as knowingly incomplete. A "Needs Review"
+filter means `PENDING_REVIEW`, never `DRAFT`. This reuses the
+`review_status` column and `DRAFT`/`APPROVED`/`REJECTED`/`MERGED` values
+that have existed since Milestone 2 (only `PENDING_REVIEW` is new), rather
+than introducing a second, competing status field — see
+`app/models/enums.py::ReviewStatus`. A dedicated `reviewed_at` timestamp is
+stamped by **any** human action on a product's own content (field edit,
+draft save, approve, reject) and `approved_at` by approval specifically;
+neither is a user/account audit trail (see scope above).
+
+Migration `alembic/versions/f2c6a4e9b1d5_add_m7_review_fields.py` adds
+`PENDING_REVIEW` to the existing Postgres `review_status` enum type (via
+`autocommit_block`, since Postgres cannot add and use a new enum value in
+the same transaction) and reclassifies every pre-existing `draft` row to
+`pending_review` — those rows were created by Milestone 4 and never
+actually touched by a human reviewer, since Milestone 7 is the first thing
+that ever set `DRAFT` deliberately.
+
+### Human-editable fields, and why AI edits stop mattering once a human touches one
+
+A reviewer can edit: `name_en`, `name_ar`, `description_en`,
+`description_ar`, `category_id`, `brand`, `flavor_variant`, `selling_mode`,
+`package_weight`, `barcode`, plus the two fields Milestone 7 itself adds
+(`price`, `stock_status`) — via `DigitizedProductReviewUpdate`
+(`app/schemas/digitized_product.py`), deliberately narrower than the
+full model so a reviewer can never touch AI-confidence/bbox/raw-result/
+status-machine fields by mistake.
+
+**Human edits are authoritative.** Saving any edit through this schema
+stamps `reviewed_at`, and `digitizer_enrichment_service.enrich_digitized_product`
+refuses outright (`409`) once `reviewed_at` is set — re-enrichment is
+disabled rather than silently overwriting a human's reviewed changes. The
+existing per-item/per-job "Enrich" actions still work normally for
+never-reviewed products.
+
+### Pricing and stock — AI never sets a price
+
+`DigitizedProduct.price` (and the mirrored `Product.price`) is a single
+field whose **meaning depends on `selling_mode`**, exactly like
+`Product.price` already worked before this milestone:
+
+- **`WEIGHT`** products: `price` is the price **per kilogram**;
+  `package_weight` must be `NULL` (enforced at approval — a loose/bulk good
+  has no fixed package to weigh).
+- **`UNIT`** products: `price` is the **fixed price for one unit/package**;
+  `package_weight` may optionally describe the item's physical net weight
+  (e.g. a printed "500g" on a bag) but carries no pricing meaning by
+  itself.
+
+No AI service in this project ever populates `price` — it is absent from
+every Milestone 4/5 AI response schema, and `EnrichmentStatus`/
+`DetectedProduct` have no price field for it to occupy even accidentally.
+`stock_status` reuses the exact `StockStatus` enum `Product` already had
+since Milestone 2 (`in_stock`/`low_stock`/`out_of_stock`), not a second
+competing enum.
+
+For a future storefront, this shop's own weight convention is: **1 ounce
+≈ 100g, 5 oz ≈ 0.5kg, 10 oz ≈ 1kg** — documented here for later milestones
+(cart/checkout, Milestone 9/10); nothing in Milestone 7 performs this
+conversion.
+
+### Reviewing images: three files, never destroyed
+
+The review UI shows all three images a `DigitizedProduct` can have side by
+side — the original source photo, the Milestone 4 crop, and the Milestone
+6 refined image (when it exists) — so a reviewer can always fall back to
+inspecting the crop even when refinement failed, was skipped (no crop to
+refine from), or was simply never run. Nothing in this milestone deletes
+or overwrites any of the three; approval prefers the refined image when
+present, falling back to the crop otherwise (see "Approval" below).
+**The review page never auto-triggers a refinement call** — "Refine"/
+"Re-refine" remain explicit, existing, separately-billed Milestone 6
+actions.
+
+### Approval validation — stricter than draft, looser than "complete"
+
+`digitizer_review_service.validate_for_approval` requires: English name,
+Arabic name, category, selling mode, a valid positive price, at least one
+product image (crop or refined), and — for `WEIGHT` products only —
+`package_weight` must be empty. It never requires barcode, brand, or
+flavor/variant, since plenty of real products genuinely lack one. Every
+failure reason is a plain English sentence returned together (`422`), e.g.
+*"English name is required. A valid, positive price is required."* — never
+a single generic "invalid" error. `DRAFT` saves go through the much looser
+`DigitizedProductReviewUpdate` schema instead and can be arbitrarily
+incomplete; `REJECT` has no completeness requirement at all.
+
+**The frontend's required-field asterisks (`*`) mirror this list exactly**
+— English name, Arabic name, Category, Selling mode, Price, and a "Product
+Image *" note near the image section — and nothing else
+(`client/src/components/review/ReviewProductDetail.tsx::RequiredMark`).
+There is deliberately no second, hand-rolled frontend validator: on a
+failed approval, the backend's exact reason sentences are shown as a
+bulleted list in the detail panel, and the user's in-progress edits are
+never reset or lost (the failed approve attempt still auto-saves the
+current field edits via the same PATCH the "Save" button uses — only the
+approval step itself fails).
+
+### `DigitizedProduct` → `Product`: transactional, idempotent, traceable
+
+Approval reuses the `DigitizedProduct.product_id` foreign key that has
+existed, unused, since Milestone 2 — not a second, competing link.
+`digitizer_review_service._upsert_catalog_product`:
+
+- If `product_id` is unset, creates a new `Product` (SKU derived
+  deterministically from the `DigitizedProduct`'s own UUID: `DP-<hex>` —
+  guaranteed unique without a separate generation/retry scheme) and links
+  it back.
+- If `product_id` is already set, **updates that same row** instead.
+
+This makes approval **idempotent**: clicking "Approve" twice (or
+re-approving after an edit) never creates a second `Product` — it always
+targets the same linked row, inside one DB transaction alongside the
+`DigitizedProduct`'s own status/timestamp update. A barcode collision with
+a *different* existing `Product` is rejected (`409`) before either row is
+touched, rather than surfacing as a raw database integrity error.
+`Product.image`/`source_image` store the existing safe digitizer media
+endpoint URL (`/api/digitizer/jobs/{job_id}/media/...`) rather than
+copying files into a separate Product-owned media tree — a deliberate,
+documented Milestone 7 simplification revisitable in a later milestone.
+`Product.unit` (a plain string, pre-existing Milestone 2 gap, not
+redesigned here) stores the `selling_mode` value; `Product.weight` stores
+`package_weight`.
+
+### Duplicate resolution: per-relationship, not per-product
+
+**Audit fix (post-initial-M7): resolution is tracked per pairwise
+relationship, not as a single flag on each product.** The first M7 cut put
+`duplicate_resolution` on `DigitizedProduct` itself; that cannot represent
+"A/B is resolved but A/C is still unresolved" — resolving one relationship
+incorrectly silenced the warning for *every* relationship that product was
+part of. `DuplicateResolution` (`unresolved` / `kept_separate` / `merged`)
+now lives on `DigitizedProductDuplicateMatch.resolution` — the row that
+already models one specific relationship — and is set on **both** directed
+rows for a resolved pair (or every pairwise combination within a resolved
+group). `DigitizedProduct.duplicate_resolution` still exists but is now
+only ever meaningfully `MERGED` (a fact about the product itself, set
+alongside `review_status=MERGED`); it is no longer read for gating
+anything.
+
+**The single source of truth** is `DigitizedProduct.has_unresolved_duplicates`
+(a computed property, exposed on every `DigitizedProductRead`): true iff at
+least one of a product's match rows still has `resolution=UNRESOLVED`.
+Every consumer — the review list's badges, the "Duplicates" filter tab
+(`client/src/components/review/ReviewFilterTabs.tsx::isUnresolvedDuplicate`),
+the detail panel's warning section, and bulk-approve's gating check — reads
+this one property (plus `review_status != MERGED`, since a merged-away
+record is locked/terminal regardless of what its own matches say) rather
+than each re-deriving its own version from `duplicate_status` or the
+historical existence of a match.
+
+Resolving a pair as **Keep Separate** marks both directed rows for that
+pair `kept_separate`; a relationship with a product *outside* the resolved
+set is untouched. Both products remain fully, independently reviewable and
+approvable, and no historical `DigitizedProductDuplicateMatch` evidence is
+ever deleted — the review detail panel shows resolved matches in a
+separate, non-actionable "Duplicate history" section rather than hiding
+them outright.
+
+**Merging never deletes anything.** A reviewer opens one candidate and
+merges a compared match into it (that open candidate becomes the
+canonical survivor for that action — a simple, deterministic choice that
+avoids a separate canonical-picker widget); the merged-away record is kept
+in full, flipped to `review_status=MERGED` (a terminal state) and linked
+back via `merged_into_id` — this is exactly what stops it from later being
+approved *or edited* independently (`409` from both the approve and review
+endpoints). The specific relationship(s) the merge settles (canonical↔each
+merged candidate, and candidate↔candidate when merging more than one at
+once) are marked `resolution=MERGED`; any *other* relationship either
+product has with a third product is untouched and, if still unresolved,
+keeps that warning showing on its own. The canonical record itself is not
+otherwise modified by the merge — the reviewer edits it normally
+afterward, same as any other product; a full field-by-field merge UI was
+judged unnecessary complexity for this milestone. A candidate that is
+**already `APPROVED`** (has its own linked `Product`) cannot be merged
+away — this is refused outright (`409`) rather than silently leaving two
+independently-approved catalog products.
+
+One known, accepted interaction: Milestone 6's `detect-duplicates` rerun
+still clears and recomputes a job's match rows from scratch (unchanged,
+per this audit's scope) — a resolution recorded against a match row is
+naturally cleared along with it on a rerun, requiring fresh review. This
+is judged *more* correct than the pre-audit behavior (a per-product flag
+that silently kept applying to a since-changed match), not a regression.
+
+### Bulk approval: stricter than one-by-one, not more lenient
+
+`POST /api/digitizer/products/bulk-approve` runs the **same**
+`validate_for_approval` check per product as single approval, plus one
+bulk-only safety rule: a product that **still has an unresolved duplicate
+relationship** (`has_unresolved_duplicates`) is refused in bulk, even
+though a single, deliberate "Approve" click on that exact product (a
+reviewer looking right at it) is still allowed — a batch action must never
+make that judgment call on the reviewer's behalf. A product whose only
+duplicate relationship was already merged or explicitly kept separate is
+**not** blocked — only a genuinely outstanding one is. A product that
+fails any
+check is left **completely unchanged** and reported in the response's
+`failed` list with its specific reasons; one product's failure never
+blocks or rolls back another's approval in the same batch. Bulk-approve
+never merges duplicates itself.
+
+### API endpoints added
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/digitizer/products` | Cross-job listing (bounded, limit 200) for the review admin UI — client-side tab filtering, a deliberate simplification at this milestone's scale. |
+| `GET` | `/api/digitizer/categories` | Read-only category listing for the review edit form's category picker. |
+| `PATCH` | `/api/digitizer/products/{id}/review` | Human field edit; may set `review_status` to `DRAFT` only. |
+| `POST` | `/api/digitizer/products/{id}/approve` | Validate, then create/update the linked `Product` (idempotent). |
+| `POST` | `/api/digitizer/products/{id}/reject` | No completeness requirement. |
+| `POST` | `/api/digitizer/products/duplicates/keep-separate` | Marks a set of products' duplicate flags resolved. |
+| `POST` | `/api/digitizer/products/duplicates/merge` | `{canonical_id, merge_ids}` — merges candidates into one survivor. |
+| `POST` | `/api/digitizer/products/bulk-approve` | `{product_ids}` — approves everything that individually passes. |
+
+### Admin UI: a second top-level view, not a redesign
+
+`client/src/App.tsx` gained a small nav switcher between the existing
+Digitizer page and a new **Review & Approval** page
+(`client/src/pages/ReviewPage.tsx`) — no router library was introduced, in
+keeping with the existing app's simple component-switching approach. The
+review page has filter tabs (**All / Needs Review / Draft / Approved /
+Rejected / Duplicates**), a checkbox-selectable product list (badges make
+review status, human-reviewed-vs-AI-only, unresolved duplicate flags, and
+missing enrichment/refinement all visible at a glance), and a detail panel
+per selected product with the structured edit form, the three-image
+comparison, an inline duplicate-comparison-and-resolution section when
+applicable, and Save / Save as Draft / Approve / Reject actions. A bulk
+action bar reports exactly which selected products were approved and why
+any others were not.
+
 ## Project Structure
 
 ```
@@ -636,9 +890,10 @@ wehbi-nuts/
 │   │   ├── App.test.tsx
 │   │   ├── main.tsx
 │   │   ├── index.css              # Tailwind v4 entrypoint
-│   │   ├── pages/                  # DigitizerPage (+ its tests)
+│   │   ├── pages/                  # DigitizerPage, ReviewPage (+ their tests)
 │   │   ├── components/digitizer/   # FileDropzone, SelectedFileList, JobHistory
-│   │   ├── api/digitizer.ts        # Typed fetch client for the digitizer API
+│   │   ├── components/review/      # Review filter tabs, product list, detail/edit panel (Milestone 7)
+│   │   ├── api/digitizer.ts        # Typed fetch client for the digitizer + review API
 │   │   ├── types/digitizer.ts      # Shared frontend types
 │   │   ├── config/                 # API base URL + upload limits (UX only)
 │   │   └── test/setup.ts
@@ -648,7 +903,7 @@ wehbi-nuts/
 │   ├── app/
 │   │   ├── __init__.py
 │   │   ├── main.py                # FastAPI app, CORS, router registration
-│   │   ├── api/                    # Route handlers (health, digitizer)
+│   │   ├── api/                    # Route handlers (health, digitizer, review)
 │   │   ├── core/                   # Config / settings
 │   │   ├── db/                     # Engine, session, declarative base, GUID type
 │   │   ├── models/                 # SQLAlchemy models + enums
@@ -661,6 +916,7 @@ wehbi-nuts/
 │   │       ├── image_refinement_service.py     # Tier 1/2 refinement (Milestone 6)
 │   │       ├── digitizer_refinement_service.py # refinement orchestration (Milestone 6)
 │   │       ├── duplicate_detection_service.py  # duplicate flagging (Milestone 6)
+│   │       ├── digitizer_review_service.py     # review/approval/merge (Milestone 7)
 │   │       └── storage.py
 │   ├── alembic/                    # Migration environment
 │   │   └── versions/                # Migration scripts
@@ -736,6 +992,28 @@ alembic downgrade -1      # roll back the most recent migration
 
 Alembic always reads the connection string from `DATABASE_URL` (via the
 app's settings) — it is never hardcoded in `alembic.ini`.
+
+### Seeding initial categories (Milestone 7, dev convenience)
+
+Milestone 7 approval requires a real `category_id` (see "Approval
+validation" under Milestone 7 below), but a fresh database has no
+`Category` rows at all — nothing before Milestone 7 ever created one — so
+approval could never be completed end-to-end without first creating some.
+After migrating, from `server/` with the virtual environment activated and
+`DATABASE_URL` configured:
+
+```powershell
+python -m app.scripts.seed_categories
+```
+
+Creates a practical starting set (Nuts, Seeds, Dried Fruits, Coffee,
+Spices & Herbs, Sweets & Chocolate, Spreads, Syrups & Molasses, Snacks,
+Other) as real `Category` rows — never a hardcoded frontend list or a
+closed code enum, since categories are meant to become admin-manageable
+later. **Idempotent**: matched by `slug` (already unique in the schema);
+running it again creates nothing new and never modifies or deletes a
+category that already exists, including one an admin has since renamed.
+See `app/scripts/seed_categories.py` for the exact list and behavior.
 
 ## Running Locally (Windows)
 

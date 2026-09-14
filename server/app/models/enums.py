@@ -15,9 +15,24 @@ class DigitizationJobStatus(str, enum.Enum):
 
 
 class ReviewStatus(str, enum.Enum):
+    """A DigitizedProduct's human-review lifecycle (Milestone 7 owns the
+    transitions below; the column and DRAFT/APPROVED/REJECTED/MERGED
+    values have existed since Milestone 2, reused rather than duplicated).
+
+    PENDING_REVIEW is the state every candidate starts in (M4 creates it,
+    no human has looked at it yet) -- distinct from DRAFT, which means a
+    human has actually opened it and deliberately saved it as incomplete/
+    not-yet-ready. Never conflate the two: a review-list "needs review"
+    filter means PENDING_REVIEW, not DRAFT.
+    """
+
+    PENDING_REVIEW = "pending_review"
     DRAFT = "draft"
     APPROVED = "approved"
     REJECTED = "rejected"
+    # This candidate was merged into a sibling (see DigitizedProduct.
+    # merged_into_id) -- a terminal state; it can never independently
+    # transition to draft/approved/rejected again.
     MERGED = "merged"
 
 
@@ -117,6 +132,23 @@ class DuplicateStatus(str, enum.Enum):
     NONE = "none"
     POSSIBLE = "possible"
     LIKELY = "likely"
+
+
+class DuplicateResolution(str, enum.Enum):
+    """Milestone 7's HUMAN decision about a Milestone 6 duplicate flag --
+    deliberately separate from `duplicate_status` (the AI's own evidence,
+    recomputed by duplicate_detection_service and never touched by human
+    action). A product can be re-flagged by a future duplicate-detection
+    rerun while still carrying a prior human resolution; see
+    digitizer_review_service for exactly how the two interact."""
+
+    UNRESOLVED = "unresolved"
+    KEPT_SEPARATE = "kept_separate"
+    # Set on a merged-AWAY record alongside review_status=MERGED. The
+    # surviving canonical record's own duplicate_resolution is untouched
+    # by a merge -- see DigitizedProduct.merged_into_id for the actual
+    # survivor link.
+    MERGED = "merged"
 
 
 class OrderStatus(str, enum.Enum):

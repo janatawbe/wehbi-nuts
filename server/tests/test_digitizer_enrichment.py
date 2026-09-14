@@ -366,12 +366,14 @@ def test_enricher_receives_the_products_context(client: TestClient, db_session: 
 
 
 def test_enrichment_response_never_contains_a_price(client: TestClient, db_session: Session):
+    """`price` exists on the response (Milestone 7) but AI enrichment must
+    never populate it -- only a human review edit/approval does."""
     candidate = create_processed_product(client)
     use_fake_enricher([make_enrichment_response()])
 
     response = client.post(f"/api/digitizer/products/{candidate['id']}/enrich")
 
-    assert "price" not in response.json()
+    assert response.json()["price"] is None
 
 
 # --- Single-item retry, independent of job/other products --------------

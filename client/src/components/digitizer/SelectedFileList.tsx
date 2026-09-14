@@ -12,15 +12,15 @@ export function SelectedFileList({ files, onRemove, disabled = false }: Selected
       {files.map((file, index) => (
         <li
           key={`${file.name}-${index}`}
-          className="flex items-center justify-between rounded border border-stone-200 bg-white px-3 py-2 text-sm"
+          className="flex items-center justify-between gap-2 rounded-md border border-stone-200 bg-white px-3 py-2 text-sm"
         >
-          <span className="truncate">{file.name}</span>
+          <span className="truncate text-stone-700">{file.name}</span>
           <button
             type="button"
             onClick={() => onRemove(index)}
             disabled={disabled}
             aria-label={`Remove ${file.name}`}
-            className="text-red-600 hover:text-red-800 disabled:opacity-50"
+            className="shrink-0 rounded px-1.5 py-0.5 text-xs font-medium text-red-600 hover:bg-red-50 hover:text-red-800 disabled:opacity-50"
           >
             Remove
           </button>

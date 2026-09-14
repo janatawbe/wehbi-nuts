@@ -3,16 +3,20 @@ import {
   DigitizerApiError,
   detectDigitizerJobDuplicates,
   enrichDigitizedProduct,
+  enrichDigitizerJob,
   getDigitizerJob,
   listDigitizerJobs,
   processDigitizerJob,
   refineDigitizedProduct,
+  refineDigitizerJob,
   uploadDigitizerJob,
 } from '../api/digitizer'
 import { FileDropzone } from '../components/digitizer/FileDropzone'
 import { JobDetails } from '../components/digitizer/JobDetails'
 import { JobHistory } from '../components/digitizer/JobHistory'
+import type { NextAction } from '../components/digitizer/JobStatus'
 import { SelectedFileList } from '../components/digitizer/SelectedFileList'
+import { Button } from '../components/ui/Button'
 import {
   DIGITIZER_ALLOWED_TYPES,
   DIGITIZER_MAX_FILES,
@@ -57,7 +61,6 @@ export function DigitizerPage() {
   const [fileErrors, setFileErrors] = useState<string[]>([])
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
-  const [successJob, setSuccessJob] = useState<DigitizerJob | null>(null)
   const [jobs, setJobs] = useState<DigitizerJob[]>([])
   const [jobsLoading, setJobsLoading] = useState(true)
   const [jobsError, setJobsError] = useState<string | null>(null)
@@ -66,14 +69,14 @@ export function DigitizerPage() {
   const [selectedJob, setSelectedJob] = useState<DigitizerJob | null>(null)
   const [jobDetailsLoading, setJobDetailsLoading] = useState(false)
   const [jobDetailsError, setJobDetailsError] = useState<string | null>(null)
-  const [processing, setProcessing] = useState(false)
-  const [processError, setProcessError] = useState<string | null>(null)
+
+  const [actionBusy, setActionBusy] = useState(false)
+  const [actionError, setActionError] = useState<string | null>(null)
+
   const [enrichingProductId, setEnrichingProductId] = useState<string | null>(null)
   const [enrichErrors, setEnrichErrors] = useState<Record<string, string>>({})
   const [refiningProductId, setRefiningProductId] = useState<string | null>(null)
   const [refineErrors, setRefineErrors] = useState<Record<string, string>>({})
-  const [detectingDuplicates, setDetectingDuplicates] = useState(false)
-  const [duplicatesError, setDuplicatesError] = useState<string | null>(null)
 
   const refreshJobs = useCallback(async () => {
     setJobsLoading(true)
@@ -94,7 +97,7 @@ export function DigitizerPage() {
 
   const handleSelectJob = useCallback(async (jobId: string) => {
     setSelectedJobId(jobId)
-    setProcessError(null)
+    setActionError(null)
     setJobDetailsLoading(true)
     setJobDetailsError(null)
     try {
@@ -110,21 +113,33 @@ export function DigitizerPage() {
     }
   }, [])
 
-  const handleProcess = async () => {
-    if (!selectedJobId || processing) return
+  const handleAction = async (action: NextAction) => {
+    if (!action || !selectedJobId || actionBusy) return
 
-    setProcessing(true)
-    setProcessError(null)
+    setActionBusy(true)
+    setActionError(null)
     try {
-      const job = await processDigitizerJob(selectedJobId)
-      setSelectedJob(job)
-      await refreshJobs()
+      switch (action.key) {
+        case 'process': {
+          const job = await processDigitizerJob(selectedJobId)
+          setSelectedJob(job)
+          await refreshJobs()
+          break
+        }
+        case 'enrich':
+          setSelectedJob(await enrichDigitizerJob(selectedJobId))
+          break
+        case 'refine':
+          setSelectedJob(await refineDigitizerJob(selectedJobId))
+          break
+        case 'detect_duplicates':
+          setSelectedJob(await detectDigitizerJobDuplicates(selectedJobId))
+          break
+      }
     } catch (err) {
-      setProcessError(
-        err instanceof DigitizerApiError ? err.message : 'Processing failed. Please try again.',
-      )
+      setActionError(err instanceof DigitizerApiError ? err.message : 'That action failed. Please try again.')
     } finally {
-      setProcessing(false)
+      setActionBusy(false)
     }
   }
 
@@ -152,7 +167,7 @@ export function DigitizerPage() {
     } catch (err) {
       setEnrichErrors((prev) => ({
         ...prev,
-        [productId]: err instanceof DigitizerApiError ? err.message : 'Enrichment failed. Please try again.',
+        [productId]: err instanceof DigitizerApiError ? err.message : 'That failed. Please try again.',
       }))
     } finally {
       setEnrichingProductId(null)
@@ -183,27 +198,10 @@ export function DigitizerPage() {
     } catch (err) {
       setRefineErrors((prev) => ({
         ...prev,
-        [productId]: err instanceof DigitizerApiError ? err.message : 'Refinement failed. Please try again.',
+        [productId]: err instanceof DigitizerApiError ? err.message : 'That failed. Please try again.',
       }))
     } finally {
       setRefiningProductId(null)
-    }
-  }
-
-  const handleDetectDuplicates = async () => {
-    if (!selectedJobId || detectingDuplicates) return
-
-    setDetectingDuplicates(true)
-    setDuplicatesError(null)
-    try {
-      const job = await detectDigitizerJobDuplicates(selectedJobId)
-      setSelectedJob(job)
-    } catch (err) {
-      setDuplicatesError(
-        err instanceof DigitizerApiError ? err.message : 'Duplicate detection failed. Please try again.',
-      )
-    } finally {
-      setDetectingDuplicates(false)
     }
   }
 
@@ -213,7 +211,6 @@ export function DigitizerPage() {
     if (valid.length > 0) {
       setSelectedFiles((prev) => [...prev, ...valid])
     }
-    setSuccessJob(null)
   }
 
   const handleRemoveFile = (index: number) => {
@@ -227,10 +224,10 @@ export function DigitizerPage() {
     setUploadError(null)
     try {
       const job = await uploadDigitizerJob(selectedFiles)
-      setSuccessJob(job)
       setSelectedFiles([])
       setFileErrors([])
       await refreshJobs()
+      await handleSelectJob(job.id)
     } catch (err) {
       setUploadError(err instanceof DigitizerApiError ? err.message : 'Upload failed. Please try again.')
     } finally {
@@ -239,25 +236,15 @@ export function DigitizerPage() {
   }
 
   return (
-    <div className="min-h-dvh bg-stone-50 px-4 py-10 sm:px-6 lg:px-8">
-      <div className="mx-auto max-w-6xl">
-        <h1 className="text-3xl font-bold text-stone-900">Wehbi Nuts</h1>
-        <p className="mt-1 text-stone-600">E-commerce Store: coming in a future milestone.</p>
+    <div className="min-h-dvh bg-cream px-4 py-8 sm:px-6 lg:px-8">
+      <div className="mx-auto max-w-3xl">
+        <h1 className="text-xl font-semibold text-stone-900">AI Product Digitizer</h1>
 
-        <section className="mt-8 rounded-lg border border-stone-200 bg-white p-4 shadow-sm sm:p-6">
-          <h2 className="text-xl font-semibold text-stone-900">AI Product Digitizer</h2>
-          <p className="mt-1 text-sm text-stone-600">
-            Upload shelf or product photos to create a digitization job. Once uploaded, select the
-            job below and process it with AI to detect sellable products and review the
-            results.
-          </p>
-
-          <div className="mt-4">
-            <FileDropzone onFilesSelected={handleFilesSelected} disabled={uploading} />
-          </div>
+        <div className="mt-5">
+          <FileDropzone onFilesSelected={handleFilesSelected} disabled={uploading} />
 
           {fileErrors.length > 0 && (
-            <ul className="mt-3 space-y-1 text-sm text-red-600" data-testid="file-errors">
+            <ul className="mt-2 space-y-1 text-sm text-red-600" data-testid="file-errors">
               {fileErrors.map((message) => (
                 <li key={message} className="break-words">
                   {message}
@@ -269,38 +256,21 @@ export function DigitizerPage() {
           <SelectedFileList files={selectedFiles} onRemove={handleRemoveFile} disabled={uploading} />
 
           {selectedFiles.length > 0 && (
-            <p className="mt-2 text-sm text-stone-500">
-              {selectedFiles.length} image{selectedFiles.length === 1 ? '' : 's'} selected
-            </p>
+            <Button variant="primary" className="mt-3" onClick={handleSubmit} disabled={uploading}>
+              {uploading ? 'Uploading...' : 'Upload Photos'}
+            </Button>
           )}
 
-          <button
-            type="button"
-            onClick={handleSubmit}
-            disabled={uploading || selectedFiles.length === 0}
-            className="mt-4 w-full rounded-md bg-emerald-600 px-4 py-2.5 font-medium text-white disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
-          >
-            {uploading ? 'Uploading...' : 'Upload photos'}
-          </button>
-
           {uploadError && (
-            <p className="mt-3 break-words text-sm text-red-600" data-testid="upload-error">
+            <p className="mt-2 break-words text-sm text-red-600" data-testid="upload-error">
               {uploadError}
             </p>
           )}
+        </div>
 
-          {successJob && (
-            <p className="mt-3 text-sm text-emerald-700" data-testid="upload-success">
-              Job created ({successJob.total_items} image
-              {successJob.total_items === 1 ? '' : 's'}). Status: {successJob.status}.
-            </p>
-          )}
-        </section>
-
-        <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-3">
-          <section className="min-w-0 rounded-lg border border-stone-200 bg-white p-4 shadow-sm sm:p-6 lg:col-span-1">
-            <h2 className="text-lg font-semibold text-stone-900">Recent digitization jobs</h2>
-            <p className="mt-1 text-sm text-stone-500">Select a job to view its details and process it.</p>
+        <div className="mt-10">
+          <h2 className="text-sm font-medium text-stone-500">Recent Jobs</h2>
+          <div className="mt-2">
             <JobHistory
               jobs={jobs}
               loading={jobsLoading}
@@ -308,29 +278,27 @@ export function DigitizerPage() {
               selectedJobId={selectedJobId}
               onSelect={handleSelectJob}
             />
-          </section>
+          </div>
+        </div>
 
-          <section className="min-w-0 rounded-lg border border-stone-200 bg-white p-4 shadow-sm sm:p-6 lg:col-span-2">
-            <h2 className="text-lg font-semibold text-stone-900">Job details</h2>
+        {selectedJobId && (
+          <div className="mt-8 border-t border-stone-200 pt-6">
             <JobDetails
               job={selectedJob}
               loading={jobDetailsLoading}
               error={jobDetailsError}
-              processing={processing}
-              processError={processError}
-              onProcess={handleProcess}
+              actionBusy={actionBusy}
+              actionError={actionError}
+              onAction={handleAction}
               enrichingProductId={enrichingProductId}
               enrichErrors={enrichErrors}
               onEnrichProduct={handleEnrichProduct}
               refiningProductId={refiningProductId}
               refineErrors={refineErrors}
               onRefineProduct={handleRefineProduct}
-              detectingDuplicates={detectingDuplicates}
-              duplicatesError={duplicatesError}
-              onDetectDuplicates={handleDetectDuplicates}
             />
-          </section>
-        </div>
+          </div>
+        )}
       </div>
     </div>
   )

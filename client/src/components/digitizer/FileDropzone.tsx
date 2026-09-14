@@ -37,12 +37,11 @@ export function FileDropzone({ onFilesSelected, disabled = false }: FileDropzone
         setIsDragActive(false)
         if (!disabled) handleFiles(event.dataTransfer.files)
       }}
-      className={`rounded-lg border-2 border-dashed p-8 text-center transition-colors ${
+      className={`rounded-md border-2 border-dashed p-6 text-center transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-roast-600 ${
         disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'
-      } ${isDragActive ? 'border-emerald-500 bg-emerald-50' : 'border-stone-300'}`}
+      } ${isDragActive ? 'border-accent-500 bg-accent-50' : 'border-stone-300 hover:border-stone-400'}`}
     >
-      <p className="font-medium text-stone-700">Drag & drop shelf or product photos here</p>
-      <p className="mt-1 text-sm text-stone-500">or click to browse</p>
+      <p className="text-sm text-stone-600">Drag &amp; drop or choose images</p>
       <input
         ref={inputRef}
         type="file"

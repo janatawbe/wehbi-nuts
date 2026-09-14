@@ -1,8 +1,9 @@
 import uuid
+from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import Boolean, CheckConstraint, ForeignKey, Integer, JSON, Numeric, String, Text
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Integer, JSON, Numeric, String, Text
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -10,6 +11,7 @@ from app.db.base import Base
 from app.db.types import GUID
 from app.models.enums import (
     BackgroundIsolationStatus,
+    DuplicateResolution,
     DuplicateStatus,
     EnrichmentStatus,
     IdentificationBasis,
@@ -17,6 +19,7 @@ from app.models.enums import (
     PresentationType,
     ReviewStatus,
     SellingMode,
+    StockStatus,
 )
 from app.models.mixins import TimestampMixin, UUIDPrimaryKeyMixin
 
@@ -44,6 +47,9 @@ class DigitizedProduct(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         CheckConstraint(
             "package_weight IS NULL OR package_weight >= 0",
             name="ck_digitized_products_package_weight_non_negative",
+        ),
+        CheckConstraint(
+            "price IS NULL OR price >= 0", name="ck_digitized_products_price_non_negative"
         ),
     )
 
@@ -109,7 +115,7 @@ class DigitizedProduct(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             values_callable=lambda enum_cls: [member.value for member in enum_cls],
         ),
         nullable=False,
-        default=ReviewStatus.DRAFT,
+        default=ReviewStatus.PENDING_REVIEW,
     )
     # Whether Milestone 5 enrichment has completed for this row -- distinct
     # from review_status above (human approval). Lets job-level enrichment
@@ -210,6 +216,64 @@ class DigitizedProduct(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # over qualifying pairwise matches) -- NULL until at least one match is
     # found. Not a foreign key: it is a synthetic group label, not a row.
     duplicate_group_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), nullable=True, index=True)
+    # Milestone 7: a single terminal fact about THIS product itself, not a
+    # per-relationship resolution -- only ever meaningfully MERGED (set
+    # alongside review_status=MERGED when this record is merged away).
+    # "Keep separate" does NOT set this field: whether a *specific*
+    # relationship (e.g. with one other candidate) is resolved lives on
+    # DigitizedProductDuplicateMatch.resolution instead, since a product
+    # can have one resolved and one still-unresolved duplicate relationship
+    # at the same time -- a single product-level flag cannot represent that.
+    # See DigitizedProduct.has_unresolved_duplicates for the actual source
+    # of truth used by the review UI/bulk-approve gating.
+    duplicate_resolution: Mapped[DuplicateResolution] = mapped_column(
+        SAEnum(
+            DuplicateResolution,
+            name="duplicate_resolution",
+            values_callable=lambda enum_cls: [member.value for member in enum_cls],
+        ),
+        nullable=False,
+        default=DuplicateResolution.UNRESOLVED,
+    )
+
+    # --- Milestone 7: human review & approval ------------------------------
+    #
+    # AI never sets price -- see app.services.digitizer_review_service.
+    # Meaning depends on selling_mode: for WEIGHT products this is the
+    # price per KILOGRAM; for UNIT products this is the fixed price for
+    # one unit/package. One field, not two competing ones, mirroring how
+    # Product.price already works (a single price column whose meaning is
+    # likewise carried by context, not a separate column per mode).
+    price: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+    stock_status: Mapped[StockStatus] = mapped_column(
+        SAEnum(
+            StockStatus,
+            name="stock_status",
+            values_callable=lambda enum_cls: [member.value for member in enum_cls],
+        ),
+        nullable=False,
+        default=StockStatus.IN_STOCK,
+    )
+    # Set whenever a human saves ANY review action on this product's own
+    # content (field edits, draft save, approve, reject) -- NOT set by
+    # duplicate keep-separate/merge actions, which are about the duplicate
+    # GROUP rather than this product's own information. Also used to guard
+    # against a manual "Re-enrich" silently overwriting reviewed edits --
+    # see digitizer_enrichment_service.enrich_digitized_product.
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Self-referential traceability link for a merged-away record (see
+    # DuplicateResolution.MERGED) -- points at the surviving canonical
+    # DigitizedProduct. NULL for every record that was never merged away,
+    # including the canonical survivor itself. ondelete=SET NULL rather
+    # than CASCADE: deleting the canonical must never cascade-delete the
+    # merged-away evidence records.
+    merged_into_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(),
+        ForeignKey("digitized_products.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
     job: Mapped["DigitizationJob"] = relationship(  # noqa: F821
         "DigitizationJob", back_populates="digitized_products"
@@ -218,6 +282,9 @@ class DigitizedProduct(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         "Product", back_populates="digitized_products"
     )
     category: Mapped["Category | None"] = relationship("Category")  # noqa: F821
+    merged_into: Mapped["DigitizedProduct | None"] = relationship(
+        "DigitizedProduct", remote_side="DigitizedProduct.id", foreign_keys=[merged_into_id]
+    )
     duplicate_matches: Mapped[list["DigitizedProductDuplicateMatch"]] = relationship(  # noqa: F821
         "DigitizedProductDuplicateMatch",
         foreign_keys="DigitizedProductDuplicateMatch.product_id",
@@ -225,3 +292,21 @@ class DigitizedProduct(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         passive_deletes=True,
         order_by="desc(DigitizedProductDuplicateMatch.score)",
     )
+
+    @property
+    def has_unresolved_duplicates(self) -> bool:
+        """The single source of truth for "does this product currently
+        require a duplicate-resolution decision" -- used by the review
+        list/badges/filter and by bulk-approve's gating check alike, so
+        none of them can drift out of sync with each other. True only when
+        at least one of this product's pairwise match rows still has
+        `resolution == UNRESOLVED` (see DigitizedProductDuplicateMatch's
+        docstring) -- NOT merely whether a match row exists at all, which
+        is what the pre-Milestone-7-audit logic incorrectly used. Since
+        `duplicate_matches` is stored bidirectionally (a row from this
+        product to every product it's matched with), this single-direction
+        list is already complete -- no second query needed.
+        """
+        return any(
+            match.resolution == DuplicateResolution.UNRESOLVED for match in self.duplicate_matches
+        )
