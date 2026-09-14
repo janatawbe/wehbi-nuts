@@ -1,8 +1,9 @@
 import { useState } from 'react'
+import { CatalogPage } from './pages/CatalogPage'
 import { DigitizerPage } from './pages/DigitizerPage'
 import { ReviewPage } from './pages/ReviewPage'
 
-type View = 'digitizer' | 'review'
+type View = 'digitizer' | 'review' | 'catalog'
 
 function App() {
   const [view, setView] = useState<View>('digitizer')
@@ -33,10 +34,20 @@ function App() {
             >
               Review
             </button>
+            <button
+              type="button"
+              onClick={() => setView('catalog')}
+              aria-current={view === 'catalog' ? 'page' : undefined}
+              className={`rounded-md px-2.5 py-1 text-sm font-medium ${
+                view === 'catalog' ? 'text-roast-800' : 'text-stone-500 hover:text-stone-800'
+              }`}
+            >
+              Catalog
+            </button>
           </nav>
         </div>
       </header>
-      {view === 'digitizer' ? <DigitizerPage /> : <ReviewPage />}
+      {view === 'digitizer' ? <DigitizerPage /> : view === 'review' ? <ReviewPage /> : <CatalogPage />}
     </div>
   )
 }

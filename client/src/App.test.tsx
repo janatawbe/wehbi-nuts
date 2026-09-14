@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import App from './App'
 
@@ -20,5 +20,11 @@ describe('App', () => {
   it('shows the AI Product Digitizer by default', () => {
     render(<App />)
     expect(screen.getByText('AI Product Digitizer')).toBeInTheDocument()
+  })
+
+  it('switches to the Catalog page when its nav link is clicked', () => {
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: 'Catalog' }))
+    expect(screen.getByRole('heading', { name: 'Catalog' })).toBeInTheDocument()
   })
 })

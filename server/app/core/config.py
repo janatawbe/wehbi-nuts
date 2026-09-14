@@ -35,6 +35,13 @@ class Settings(BaseSettings):
     # refiner otherwise (see api/digitizer.get_product_image_refiner).
     openrouter_image_refinement_model: str = "google/gemini-2.5-flash-image"
 
+    # Catalog import/export (Milestone 8). Spreadsheets are tiny compared
+    # to the digitizer's image uploads -- these limits exist purely to
+    # reject an obviously-wrong or abusive upload before it's parsed, not
+    # to accommodate a real catalog size concern.
+    catalog_import_max_file_size_bytes: int = 5 * 1024 * 1024  # 5 MB
+    catalog_import_max_rows: int = 5000
+
 
 @lru_cache
 def get_settings() -> Settings:

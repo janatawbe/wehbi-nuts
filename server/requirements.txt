@@ -35,3 +35,8 @@ imagehash==4.3.2
 # Milestone 4's merge.
 onnxruntime==1.23.2
 rembg==2.0.69
+
+# Catalog import/export (Milestone 8, Excel-only). openpyxl reads/writes
+# .xlsx in-memory -- no spreadsheet application, macros, or formula
+# evaluation involved.
+openpyxl==3.1.5
