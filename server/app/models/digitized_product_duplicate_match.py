@@ -2,10 +2,12 @@ import uuid
 from decimal import Decimal
 
 from sqlalchemy import CheckConstraint, ForeignKey, JSON, Numeric, UniqueConstraint
+from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 from app.db.types import GUID
+from app.models.enums import DuplicateResolution
 from app.models.mixins import TimestampMixin, UUIDPrimaryKeyMixin
 
 
@@ -23,6 +25,20 @@ class DigitizedProductDuplicateMatch(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     Never implies a merge -- this table only records evidence for a human
     to review later; nothing in Milestone 6 deletes or mutates a
     DigitizedProduct based on its presence.
+
+    `resolution` (Milestone 7) is the HUMAN decision about THIS SPECIFIC
+    pairwise relationship -- the actual source of truth for "does this
+    product currently have an unresolved duplicate conflict" (see
+    DigitizedProduct.has_unresolved_duplicates). This is deliberately
+    per-relationship rather than a single flag on DigitizedProduct itself:
+    a product can simultaneously have one resolved and one still-unresolved
+    duplicate relationship (e.g. A/B merged, A/C still pending), which a
+    single product-level field cannot represent correctly. A resolution
+    action (merge or keep-separate) updates BOTH directed rows for the
+    resolved pair(s), so a lookup from either side agrees. Rows are never
+    deleted by a resolution action -- only detect_duplicates_for_job's own
+    from-scratch recompute (Milestone 6, unchanged) replaces them, which is
+    also the only way a resolution can go stale (see README).
     """
 
     __tablename__ = "digitized_product_duplicate_matches"
@@ -52,6 +68,15 @@ class DigitizedProductDuplicateMatch(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # -- see duplicate_detection_service for the exact vocabulary. Always a
     # non-empty explanation of why this pair was flagged.
     reasons: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    resolution: Mapped[DuplicateResolution] = mapped_column(
+        SAEnum(
+            DuplicateResolution,
+            name="duplicate_resolution",
+            values_callable=lambda enum_cls: [member.value for member in enum_cls],
+        ),
+        nullable=False,
+        default=DuplicateResolution.UNRESOLVED,
+    )
 
     matched_product: Mapped["DigitizedProduct"] = relationship(  # noqa: F821
         "DigitizedProduct", foreign_keys=[matched_product_id]

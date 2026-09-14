@@ -17,9 +17,8 @@ describe('App', () => {
     expect(screen.getByText('Wehbi Nuts')).toBeInTheDocument()
   })
 
-  it('indicates the AI Product Digitizer and E-commerce Store features', () => {
+  it('shows the AI Product Digitizer by default', () => {
     render(<App />)
     expect(screen.getByText('AI Product Digitizer')).toBeInTheDocument()
-    expect(screen.getByText(/E-commerce Store/)).toBeInTheDocument()
   })
 })

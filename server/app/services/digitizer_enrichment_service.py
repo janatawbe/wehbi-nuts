@@ -57,6 +57,18 @@ def enrich_digitized_product(
     product = db.get(DigitizedProduct, product_id)
     if product is None:
         raise EnrichmentError("Digitized product not found.", status_code=404)
+    if product.reviewed_at is not None:
+        # Milestone 7: human edits are authoritative. This product has
+        # already been touched by a reviewer (field edit, draft save,
+        # approve, or reject) -- re-running enrichment would silently
+        # overwrite that with a fresh AI guess. Refuse outright rather than
+        # merge/skip individual fields, so the failure is obvious instead
+        # of a confusing partial overwrite.
+        raise EnrichmentError(
+            "This product has already been reviewed by a human; re-enrichment is disabled to avoid "
+            "overwriting reviewed changes.",
+            status_code=409,
+        )
     if not product.crop_image:
         raise EnrichmentError("This product has no crop image to enrich from.", status_code=400)
 

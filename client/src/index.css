@@ -1,1 +1,32 @@
 @import 'tailwindcss';
+
+/* Wehbi Nuts brand tokens -- a warm, premium roastery feel rather than a
+ * generic SaaS palette. `stone` (Tailwind's built-in warm-gray scale) is
+ * kept as the neutral base since it already reads warm; these tokens add
+ * the brand-specific warm-brown ("roast") and restrained-green ("accent")
+ * colors used for headings/branding and primary actions respectively. */
+@theme {
+  --color-cream: #faf7f2;
+
+  --color-roast-50: #f7f1ea;
+  --color-roast-100: #ecdfcd;
+  --color-roast-200: #dcc4a3;
+  --color-roast-300: #c7a377;
+  --color-roast-400: #ab7d51;
+  --color-roast-500: #8a5e39;
+  --color-roast-600: #6f4a2d;
+  --color-roast-700: #573a24;
+  --color-roast-800: #402a1a;
+  --color-roast-900: #2c1c11;
+
+  --color-accent-50: #eef4ee;
+  --color-accent-100: #d7e6d6;
+  --color-accent-200: #b2cfaf;
+  --color-accent-300: #86b183;
+  --color-accent-400: #5f9260;
+  --color-accent-500: #46764a;
+  --color-accent-600: #395f3c;
+  --color-accent-700: #2f4c32;
+  --color-accent-800: #263c29;
+  --color-accent-900: #1c2c1f;
+}

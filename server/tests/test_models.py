@@ -277,7 +277,7 @@ def test_digitized_product_default_review_status(db_session):
     db_session.add(dp)
     db_session.commit()
 
-    assert dp.review_status == ReviewStatus.DRAFT
+    assert dp.review_status == ReviewStatus.PENDING_REVIEW
     assert dp.needs_review is True
     assert dp.product_id is None
     assert dp.product is None
@@ -454,7 +454,7 @@ def test_enum_values():
         "pending", "processing", "completed", "failed",
     }
     assert {s.value for s in ReviewStatus} == {
-        "draft", "approved", "rejected", "merged",
+        "pending_review", "draft", "approved", "rejected", "merged",
     }
     assert {s.value for s in OrderStatus} == {
         "pending", "confirmed", "preparing", "out_for_delivery", "delivered", "cancelled",
