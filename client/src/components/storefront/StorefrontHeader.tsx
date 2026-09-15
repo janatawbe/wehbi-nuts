@@ -58,7 +58,7 @@ export function StorefrontHeader() {
   }
 
   return (
-    <header className="sticky top-0 z-30 border-b border-stone-200/80 bg-cream/95 shadow-[0_6px_16px_-8px_rgba(44,28,17,0.22)] backdrop-blur">
+    <header className="sticky top-0 z-30 border-b border-roast-900/15 bg-cream-deep/95 shadow-[0_10px_24px_-8px_rgba(44,28,17,0.32)] backdrop-blur">
       <div className="mx-auto flex max-w-6xl items-center gap-4 px-4 py-3 sm:px-6">
         <Link to="/" className="flex items-center gap-2.5 shrink-0" aria-label="Wehbi Nuts home">
           <img src={wehbiLogoMark} alt="Wehbi Nuts" className="h-10 w-10 sm:h-11 sm:w-11" />
@@ -140,7 +140,7 @@ export function StorefrontHeader() {
       </div>
 
       {mobileOpen && (
-        <div className="border-t border-stone-200 bg-cream px-4 pb-5 pt-3 md:hidden">
+        <div className="border-t border-stone-200 bg-cream-deep px-4 pb-5 pt-3 md:hidden">
           <div className="mb-3 flex justify-end">
             <LanguageSwitcher />
           </div>
