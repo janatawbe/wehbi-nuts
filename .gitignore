@@ -30,6 +30,12 @@ server/uploads/digitizer/*
 server/reference-images/*
 !server/reference-images/README.md
 
+# --- Milestone 9 homepage design-inspiration reference: same category as
+# the M6 reference images above -- local visual-inspiration guidance
+# only (explicitly "not to be copied literally"), never application code
+# or data, and not ours to redistribute. ---
+design-references/
+
 # --- Editor / OS ---
 .vscode/
 .idea/

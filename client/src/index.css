@@ -29,4 +29,85 @@
   --color-accent-700: #2f4c32;
   --color-accent-800: #263c29;
   --color-accent-900: #1c2c1f;
+
+  /* Storefront brand palette (Milestone 9) -- sampled directly from the
+   * official logo (client/src/assets/wehbi-logo.png): red ~#c31c25,
+   * yellow ring ~#fcf025, "W" orange ~#f18721. `wehbi-red`/`wehbi-gold`
+   * are full scales built around those anchors for strategic use across
+   * the storefront; `wehbi-yellow`/`wehbi-orange` are single decorative
+   * tokens matching the logo's exact ring/mark colors for small brand
+   * accents (never for body text -- too light/saturated to read well).
+   * Entirely additive: the admin tools above keep using cream/roast/
+   * accent and are untouched by any of this. */
+  --color-wehbi-red-50: #fdf2f2;
+  --color-wehbi-red-100: #fbe1e1;
+  --color-wehbi-red-200: #f6c2c3;
+  --color-wehbi-red-300: #ec9799;
+  --color-wehbi-red-400: #dd686b;
+  --color-wehbi-red-500: #c93a3d;
+  --color-wehbi-red-600: #c31c25;
+  --color-wehbi-red-700: #9c161d;
+  --color-wehbi-red-800: #751116;
+  --color-wehbi-red-900: #4e0b0f;
+
+  --color-wehbi-gold-50: #fff9e8;
+  --color-wehbi-gold-100: #fef0c2;
+  --color-wehbi-gold-200: #fde08a;
+  --color-wehbi-gold-300: #fbcb52;
+  --color-wehbi-gold-400: #f7b52e;
+  --color-wehbi-gold-500: #eda01e;
+  --color-wehbi-gold-600: #cf8316;
+  --color-wehbi-gold-700: #a8660f;
+  --color-wehbi-gold-800: #7d4a0c;
+  --color-wehbi-gold-900: #543109;
+
+  --color-wehbi-yellow: #fcf025;
+  --color-wehbi-orange: #f18721;
+
+  /* A slightly deeper wash than --color-cream, for alternating storefront
+   * section backgrounds without reaching for gray. */
+  --color-cream-deep: #f5ecdd;
+
+  /* Storefront typography system (customer-facing only -- see
+   * StorefrontLayout/NotFoundPage for where `font-body` is applied, and
+   * AdminLayout, which never references either token, for why the admin
+   * tools keep their own plain system-font look).
+   * - display: Fraunces -- a distinctive, editorial serif with sharp,
+   *   characterful (not rounded) letterforms for headlines/promotional
+   *   text. Its own italic (see HomePage's one hero accent word) stands
+   *   in for a script flourish, so no separate handwritten font is
+   *   loaded at all -- exactly two families, total.
+   * - body: Libre Franklin -- a clean, sharp grotesque (a modernized
+   *   Franklin Gothic) for highly-readable UI text: nav, product names,
+   *   prices, descriptions, buttons, search. */
+  --font-display: 'Fraunces', ui-serif, Georgia, 'Times New Roman', serif;
+  --font-body: 'Libre Franklin', ui-sans-serif, system-ui, sans-serif;
+}
+
+/* Milestone 9 Arabic support: `[data-storefront-lang="ar"]` is set ONLY
+ * on StorefrontLayout/NotFoundPage's own root element (see those
+ * components) -- never on `<html>` -- so this can never reach the
+ * separately-rooted admin route tree. Cairo replaces BOTH the display
+ * and body fonts while Arabic is active: Fraunces/Libre Franklin have no
+ * Arabic glyphs at all, and Cairo's own sharp, geometric letterforms
+ * already fit the storefront's editorial/premium (not rounded/bubbly)
+ * direction for both headings and body text, so a single Arabic family
+ * covers both roles cleanly. */
+[data-storefront-lang='ar'] {
+  --font-display: 'Cairo', ui-sans-serif, system-ui, sans-serif;
+  --font-body: 'Cairo', ui-sans-serif, system-ui, sans-serif;
+}
+
+/* Respect the OS-level reduced-motion preference project-wide: any
+ * storefront animation opts into motion via classes/inline styles that
+ * are themselves skipped when this matches (see components/storefront's
+ * use of framer-motion's `useReducedMotion`), but this blanket rule is a
+ * safety net for any plain CSS transition/animation too. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
