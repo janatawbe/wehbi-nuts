@@ -10,6 +10,7 @@ from app.models.enums import (
     DigitizationJobStatus,
     OrderStatus,
     ReviewStatus,
+    SellingMode,
     StockStatus,
 )
 from app.schemas.order_item import OrderItemCreate
@@ -326,6 +327,7 @@ def test_order_order_items_relationship(db_session):
     item = OrderItem(
         order_id=order.id,
         product_name="Almonds 500g",
+        selling_mode=SellingMode.UNIT,
         quantity=2,
         unit_price=Decimal("5.00"),
         line_total=Decimal("10.00"),
@@ -363,6 +365,7 @@ def test_order_item_quantity_must_be_positive_db(db_session):
         OrderItem(
             order_id=order.id,
             product_name="X",
+            selling_mode=SellingMode.UNIT,
             quantity=0,
             unit_price=Decimal("1"),
             line_total=Decimal("0"),
@@ -400,6 +403,7 @@ def test_order_item_snapshot_survives_product_changes(db_session):
         order_id=order.id,
         product_id=product.id,
         product_name=product.name_en,
+        selling_mode=SellingMode.UNIT,
         quantity=1,
         unit_price=product.price,
         line_total=product.price,
@@ -425,6 +429,7 @@ def test_order_item_survives_product_deletion(db_session):
         order_id=order.id,
         product_id=product.id,
         product_name=product.name_en,
+        selling_mode=SellingMode.UNIT,
         quantity=1,
         unit_price=product.price,
         line_total=product.price,
@@ -486,6 +491,7 @@ def test_order_item_has_created_at_but_no_updated_at(db_session):
     item = OrderItem(
         order_id=order.id,
         product_name="X",
+        selling_mode=SellingMode.UNIT,
         quantity=1,
         unit_price=Decimal("1"),
         line_total=Decimal("1"),

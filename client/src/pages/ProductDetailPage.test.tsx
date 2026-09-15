@@ -3,6 +3,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
 import * as storefrontApi from '../api/storefront'
 import { StorefrontApiError } from '../api/storefront'
+import { LanguageProvider } from '../i18n/LanguageContext'
 import type { StorefrontProduct } from '../types/storefront'
 import { ProductDetailPage } from './ProductDetailPage'
 
@@ -39,6 +40,21 @@ function renderDetail(id = 'p1') {
         <Route path="/product/:id" element={<ProductDetailPage />} />
       </Routes>
     </MemoryRouter>,
+  )
+}
+
+const LANGUAGE_STORAGE_KEY = 'wehbi-nuts-storefront-language'
+
+function renderDetailInArabic(id = 'p1') {
+  window.localStorage.setItem(LANGUAGE_STORAGE_KEY, 'ar')
+  return render(
+    <LanguageProvider>
+      <MemoryRouter initialEntries={[`/product/${id}`]}>
+        <Routes>
+          <Route path="/product/:id" element={<ProductDetailPage />} />
+        </Routes>
+      </MemoryRouter>
+    </LanguageProvider>,
   )
 }
 
@@ -99,12 +115,20 @@ describe('ProductDetailPage', () => {
     expect(await screen.findByText('Out of stock')).toBeInTheDocument()
   })
 
-  it('never shows an Add to Cart control since cart functionality does not exist yet', async () => {
+  it('shows an Add to Cart control for an in-stock product (Milestone 10)', async () => {
     vi.mocked(storefrontApi.getStorefrontProduct).mockResolvedValue(makeProduct())
     renderDetail()
 
     await screen.findByRole('heading', { name: 'Roasted Almonds' })
-    expect(screen.queryByRole('button', { name: /add to cart/i })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /add to cart/i })).toBeEnabled()
+  })
+
+  it('disables the Add to Cart control for an out-of-stock product', async () => {
+    vi.mocked(storefrontApi.getStorefrontProduct).mockResolvedValue(makeProduct({ stock_status: 'out_of_stock' }))
+    renderDetail()
+
+    await screen.findByRole('heading', { name: 'Roasted Almonds' })
+    expect(screen.getByRole('button', { name: /add to cart/i })).toBeDisabled()
   })
 
   it('shows a not-found state for a missing product', async () => {
@@ -112,5 +136,28 @@ describe('ProductDetailPage', () => {
     renderDetail('unknown-id')
 
     expect(await screen.findByText('Product not found')).toBeInTheDocument()
+  })
+
+  it('shows the Arabic name and description when Arabic is active (regression)', async () => {
+    vi.mocked(storefrontApi.getStorefrontProduct).mockResolvedValue(
+      makeProduct({ name_ar: 'لوز محمص', description_en: 'Freshly roasted daily.', description_ar: 'محمص طازجاً يومياً.' }),
+    )
+    renderDetailInArabic()
+
+    expect(await screen.findByRole('heading', { name: 'لوز محمص' })).toBeInTheDocument()
+    expect(screen.getByText('محمص طازجاً يومياً.')).toBeInTheDocument()
+    expect(screen.queryByText('Freshly roasted daily.')).not.toBeInTheDocument()
+    window.localStorage.removeItem('wehbi-nuts-storefront-language')
+  })
+
+  it('falls back to the English description in Arabic mode when the Arabic description is empty', async () => {
+    vi.mocked(storefrontApi.getStorefrontProduct).mockResolvedValue(
+      makeProduct({ description_en: 'Freshly roasted daily.', description_ar: null }),
+    )
+    renderDetailInArabic()
+
+    await screen.findByRole('heading', { name: 'لوز محمص' })
+    expect(screen.getByText('Freshly roasted daily.')).toBeInTheDocument()
+    window.localStorage.removeItem('wehbi-nuts-storefront-language')
   })
 })

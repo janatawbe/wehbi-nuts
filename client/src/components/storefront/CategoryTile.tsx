@@ -2,26 +2,7 @@ import { Link } from 'react-router-dom'
 import { useLanguage } from '../../i18n/LanguageContext'
 import { localizedField } from '../../i18n/translations'
 import type { StorefrontCategory } from '../../types/storefront'
-import coffee from '../../assets/category_images/coffee.png'
-import driedFruits from '../../assets/category_images/dried_fruits.png'
-import nuts from '../../assets/category_images/nuts.png'
-import snacksSweets from '../../assets/category_images/snacks_and_sweets.png'
-import seeds from '../../assets/category_images/seeds.png'
-import spiceHerbs from '../../assets/category_images/spice_and_herbs.png'
-import gifts from '../../assets/category_images/gifts.png'
-
-// Real product photography for each of the seven official categories, shot
-// on a soft cream backdrop that already blends into the page -- no letter
-// badges/gradients needed anymore.
-const CATEGORY_IMAGES: Record<string, string> = {
-  coffee,
-  'dried-fruits': driedFruits,
-  nuts,
-  'snacks-sweets': snacksSweets,
-  seeds,
-  'spice-herbs': spiceHerbs,
-  gifts,
-}
+import { CATEGORY_IMAGES } from './categoryImages'
 
 interface CategoryTileProps {
   category: StorefrontCategory

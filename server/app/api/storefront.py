@@ -4,7 +4,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
+from app.models.order import Order
+from app.schemas.checkout import CheckoutRequest, CheckoutResult
 from app.schemas.storefront import StorefrontCategoryRead, StorefrontProductRead
+from app.services.checkout_service import CheckoutError, create_order_from_checkout
 from app.services.storefront_service import (
     get_storefront_product,
     list_storefront_categories,
@@ -35,3 +38,16 @@ def get_product(product_id: uuid.UUID, db: Session = Depends(get_db)) -> Storefr
     if product is None:
         raise HTTPException(status_code=404, detail="Product not found.")
     return product
+
+
+@router.post("/checkout", response_model=CheckoutResult, status_code=201)
+def checkout(request: CheckoutRequest, db: Session = Depends(get_db)) -> Order:
+    """Milestone 10: the sole Cash-on-Delivery order-creation endpoint.
+    Every price/subtotal/total in the response is computed server-side by
+    create_order_from_checkout -- see that function and CheckoutRequest's
+    own docstring for why the request itself carries no price fields to
+    accept or reject."""
+    try:
+        return create_order_from_checkout(db, request)
+    except CheckoutError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc

@@ -1,6 +1,8 @@
+import { motion } from 'framer-motion'
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { StorefrontApiError, getStorefrontProduct } from '../api/storefront'
+import { AddToCartControl } from '../components/storefront/AddToCartControl'
 import { ProductImage } from '../components/storefront/ProductImage'
 import { getSellingInfo } from '../components/storefront/productPricing'
 import { useLanguage } from '../i18n/LanguageContext'
@@ -11,6 +13,12 @@ const STOCK_LABEL_KEY: Record<StorefrontProduct['stock_status'], TranslationKey 
   in_stock: null,
   low_stock: 'product.stock.low',
   out_of_stock: 'product.stock.out',
+}
+
+const STOCK_DOT_CLASS: Record<StorefrontProduct['stock_status'], string> = {
+  in_stock: '',
+  low_stock: 'bg-wehbi-gold-500',
+  out_of_stock: 'bg-stone-400',
 }
 
 const STOCK_LABEL_CLASS: Record<StorefrontProduct['stock_status'], string> = {
@@ -53,8 +61,8 @@ export function ProductDetailPage() {
   if (loading) {
     return (
       <div className="mx-auto max-w-5xl px-4 py-10 sm:px-6" data-testid="product-detail-loading">
-        <div className="grid gap-8 sm:grid-cols-2">
-          <div className="aspect-square animate-pulse rounded-2xl bg-stone-200/70" />
+        <div className="grid gap-8 sm:grid-cols-2 sm:gap-14">
+          <div className="aspect-square animate-pulse rounded-3xl bg-stone-200/70" />
           <div className="space-y-3">
             <div className="h-7 w-2/3 animate-pulse rounded bg-stone-200/70" />
             <div className="h-5 w-1/3 animate-pulse rounded bg-stone-200/70" />
@@ -86,68 +94,100 @@ export function ProductDetailPage() {
   const secondaryName = language === 'ar' ? product.name_en : product.name_ar
 
   return (
-    <div className="mx-auto max-w-5xl px-4 py-10 sm:px-6">
-      <nav className="mb-6 text-sm text-stone-500" aria-label="Breadcrumb">
-        <Link to="/shop" className="hover:text-wehbi-red-700">
+    <div className="mx-auto max-w-5xl px-4 py-10 sm:px-6 sm:py-14">
+      <nav className="mb-6 flex items-center gap-2 text-sm text-stone-400 sm:mb-10" aria-label="Breadcrumb">
+        <Link to="/shop" className="transition-colors hover:text-wehbi-red-700">
           {t('product.breadcrumb.shop')}
         </Link>
         {product.category && (
           <>
-            {' / '}
-            <Link to={`/category/${product.category.slug}`} className="hover:text-wehbi-red-700">
+            <span aria-hidden="true" className="text-stone-300">
+              {forwardArrow(direction) === '→' ? '›' : '‹'}
+            </span>
+            <Link to={`/category/${product.category.slug}`} className="transition-colors hover:text-wehbi-red-700">
               {categoryName}
             </Link>
           </>
         )}
       </nav>
 
-      <div className="grid gap-8 sm:grid-cols-2 sm:gap-10">
-        <div className="overflow-hidden rounded-2xl bg-cream-deep">
+      <div className="grid gap-10 sm:grid-cols-2 sm:gap-14 lg:gap-20">
+        <motion.div
+          initial={{ opacity: 0, scale: 0.98 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{ duration: 0.4, ease: 'easeOut' }}
+          className="overflow-hidden rounded-3xl bg-cream-deep shadow-[0_24px_48px_-24px_rgba(44,28,17,0.25)] sm:sticky sm:top-24 sm:self-start"
+        >
           <ProductImage src={product.image} alt={primaryName} className="aspect-square w-full" />
-        </div>
+        </motion.div>
 
-        <div>
-          {stockLabelKey && (
-            <span className={`mb-3 inline-block rounded-full px-2.5 py-1 text-xs font-medium ${STOCK_LABEL_CLASS[product.stock_status]}`}>
-              {t(stockLabelKey)}
-            </span>
+        <motion.div
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4, ease: 'easeOut', delay: 0.1 }}
+        >
+          {categoryName && (
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-wehbi-red-600">{categoryName}</p>
           )}
-          <h1 className="text-3xl font-semibold text-roast-900">{primaryName}</h1>
+
+          <h1 className="mt-2 font-display text-3xl font-semibold leading-tight text-roast-900 sm:text-4xl">
+            {primaryName}
+          </h1>
           {secondaryName && (
-            <p className="mt-1 text-lg text-stone-500" dir={language === 'ar' ? 'ltr' : 'rtl'}>
+            <p className="mt-1.5 text-base text-stone-400" dir={language === 'ar' ? 'ltr' : 'rtl'}>
               {secondaryName}
             </p>
           )}
 
-          <p className="mt-5 text-2xl font-semibold text-wehbi-red-700">
-            {primary}
-            {product.selling_mode === 'weight' && (
-              <span className="ms-2 text-sm font-normal text-stone-500">{t('product.pricePerKg')}</span>
-            )}
-          </p>
-          {secondary && <p className="mt-1 text-sm text-stone-500">{secondary}</p>}
-
-          {product.description_en && (
-            <p className="mt-6 text-sm leading-relaxed text-stone-600">
-              {localizedField(product.description_en, product.description_ar, language)}
-            </p>
+          {stockLabelKey && (
+            <span
+              className={`mt-4 inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ${STOCK_LABEL_CLASS[product.stock_status]}`}
+            >
+              <span className={`h-1.5 w-1.5 rounded-full ${STOCK_DOT_CLASS[product.stock_status]}`} aria-hidden="true" />
+              {t(stockLabelKey)}
+            </span>
           )}
 
-          <dl className="mt-8 space-y-2 border-t border-stone-200 pt-6 text-sm">
-            {product.category && (
-              <div className="flex justify-between">
-                <dt className="text-stone-500">{t('product.category')}</dt>
-                <dd className="font-medium text-roast-900">{categoryName}</dd>
-              </div>
+          <div className="mt-6 flex items-baseline gap-2.5">
+            <p className="text-3xl font-semibold text-wehbi-red-700">{primary}</p>
+            {product.selling_mode === 'weight' && (
+              <span className="text-sm text-stone-400">{t('product.pricePerKg')}</span>
             )}
-            {product.brand && (
-              <div className="flex justify-between">
-                <dt className="text-stone-500">{t('product.brand')}</dt>
-                <dd className="font-medium text-roast-900">{product.brand}</dd>
-              </div>
-            )}
-          </dl>
-        </div>
+          </div>
+          {secondary && <p className="mt-1 text-sm text-stone-500">{secondary}</p>}
+
+          <div className="mt-7 border-t border-stone-200 pt-7">
+            <AddToCartControl product={product} variant="full" />
+          </div>
+
+          {product.description_en && (
+            <div className="mt-8 border-t border-stone-200 pt-7">
+              <p className="text-xs font-semibold uppercase tracking-wide text-stone-500">
+                {t('product.description.label')}
+              </p>
+              <p className="mt-2 text-sm leading-relaxed text-stone-600">
+                {localizedField(product.description_en, product.description_ar, language)}
+              </p>
+            </div>
+          )}
+
+          {(product.category || product.brand) && (
+            <dl className="mt-7 divide-y divide-stone-200 border-t border-stone-200 text-sm">
+              {product.category && (
+                <div className="flex justify-between py-3">
+                  <dt className="text-stone-500">{t('product.category')}</dt>
+                  <dd className="font-medium text-roast-900">{categoryName}</dd>
+                </div>
+              )}
+              {product.brand && (
+                <div className="flex justify-between py-3">
+                  <dt className="text-stone-500">{t('product.brand')}</dt>
+                  <dd className="font-medium text-roast-900">{product.brand}</dd>
+                </div>
+              )}
+            </dl>
+          )}
+        </motion.div>
       </div>
     </div>
   )

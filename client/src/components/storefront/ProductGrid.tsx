@@ -21,7 +21,7 @@ export function ProductGrid({ products, loading, error, emptyMessage }: ProductG
 
   if (loading) {
     return (
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4" data-testid="product-grid-loading">
+      <div className="grid grid-cols-2 gap-x-5 gap-y-10 sm:grid-cols-3 lg:grid-cols-4" data-testid="product-grid-loading">
         {Array.from({ length: 8 }).map((_, index) => (
           <div key={index} className="animate-pulse space-y-3">
             <div className="aspect-square rounded-2xl bg-stone-200/70" />
@@ -50,7 +50,7 @@ export function ProductGrid({ products, loading, error, emptyMessage }: ProductG
   }
 
   return (
-    <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4" data-testid="product-grid">
+    <div className="grid grid-cols-2 gap-x-5 gap-y-10 sm:grid-cols-3 lg:grid-cols-4" data-testid="product-grid">
       {products.map((product) => (
         <ProductCard key={product.id} product={product} />
       ))}
